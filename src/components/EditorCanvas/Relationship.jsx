@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from "react";
+import { memo, useMemo, useRef, useState, useEffect } from "react";
 import { Cardinality, ObjectType, Tab } from "../../data/constants";
 import { calcPath, calcCompositePath } from "../../utils/calcPath";
 import { useDiagram, useSettings, useLayout, useSelect } from "../../hooks";
@@ -14,7 +14,7 @@ import {
 
 const labelFontSize = 16;
 
-export default function Relationship({ data }) {
+function Relationship({ data }) {
   const { settings } = useSettings();
   const { tables, relationships } = useDiagram();
   const { layout } = useLayout();
@@ -208,7 +208,9 @@ export default function Relationship({ data }) {
           <text
             x={labelX}
             y={labelY}
-            fill={data.color ?? (settings.mode === "dark" ? "lightgrey" : "#333")}
+            fill={
+              data.color ?? (settings.mode === "dark" ? "lightgrey" : "#333")
+            }
             fontSize={labelFontSize}
             fontWeight={500}
             ref={labelRef}
@@ -296,3 +298,6 @@ function CardinalityLabel({ x, y, text, color, r = 12, padding = 14 }) {
     </g>
   );
 }
+
+// memoized so that panning, which re-renders the canvas, skips unchanged relationships
+export default memo(Relationship);

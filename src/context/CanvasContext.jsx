@@ -1,5 +1,12 @@
-import { useTransform } from "../hooks";
-import { createContext, useCallback, useMemo, useRef, useState } from "react";
+import { useSettings, useTransform } from "../hooks";
+import {
+  createContext,
+  useCallback,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { useEventListener, useResizeObserver } from "usehooks-ts";
 
 export const CanvasContext = createContext({
@@ -108,13 +115,24 @@ export function CanvasContextProvider({ children, ...attrs }) {
     ],
   );
 
-  const [pointerScreenCoords, setPointerScreenCoords] = useState({
-    x: 0,
-    y: 0,
-  });
-  const pointerDiagramCoords = useMemo(
-    () => toDiagramSpace(pointerScreenCoords),
-    [pointerScreenCoords, toDiagramSpace],
+  // The pointer position is kept in a ref instead of state: updating state on
+  // every pointermove re-rendered the whole canvas even when nothing changed.
+  // Handlers read the latest position through the getters below.
+  const { settings } = useSettings();
+  const [, rerenderDebugCoordinates] = useReducer((n) => n + 1, 0);
+  const pointerScreenRef = useRef({ x: 0, y: 0 });
+  const toDiagramSpaceRef = useRef(toDiagramSpace);
+  toDiagramSpaceRef.current = toDiagramSpace;
+  const pointerSpaces = useMemo(
+    () => ({
+      get screen() {
+        return pointerScreenRef.current;
+      },
+      get diagram() {
+        return toDiagramSpaceRef.current(pointerScreenRef.current);
+      },
+    }),
+    [],
   );
   const [pointerStyle, setPointerStyle] = useState("default");
 
@@ -127,10 +145,12 @@ export function CanvasContextProvider({ children, ...attrs }) {
 
     const canvasBounds = targetElm.getBoundingClientRect();
 
-    setPointerScreenCoords({
+    pointerScreenRef.current = {
       x: e.clientX - canvasBounds.left,
       y: e.clientY - canvasBounds.top,
-    });
+    };
+    // only the debug panel shows the live position
+    if (settings.showDebugCoordinates) rerenderDebugCoordinates();
   }
 
   // Important for touch screen devices!
@@ -148,10 +168,7 @@ export function CanvasContextProvider({ children, ...attrs }) {
       toScreenSpace,
     },
     pointer: {
-      spaces: {
-        screen: pointerScreenCoords,
-        diagram: pointerDiagramCoords,
-      },
+      spaces: pointerSpaces,
       style: pointerStyle,
       setStyle: setPointerStyle,
     },
@@ -163,5 +180,5 @@ export function CanvasContextProvider({ children, ...attrs }) {
         {children}
       </div>
     </CanvasContext.Provider>
-  )
+  );
 }

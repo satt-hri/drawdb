@@ -234,7 +234,9 @@
   stroke-width: 2.5;
   fill: none;
   stroke-linecap: butt;
-  transition: stroke 0.2s ease, stroke-width 0.2s ease;
+  transition:
+    stroke 0.2s ease,
+    stroke-width 0.2s ease;
   pointer-events: stroke;
 }
 
@@ -243,5 +245,27 @@
   stroke-width: 6;
   stroke-dasharray: 12 8;
   animation: dash-right 1s linear infinite;
-  
+}
+
+/* highlight of a table picked in the sidebar */
+.table-focus-flash {
+  fill: rgb(245 158 11 / 0.12);
+  stroke: rgb(245 158 11);
+  stroke-width: 4px;
+  animation: table-focus-flash 2s ease-out forwards;
+}
+
+@keyframes table-focus-flash {
+  0%,
+  30%,
+  60% {
+    opacity: 1;
+  }
+  15%,
+  45% {
+    opacity: 0.25;
+  }
+  100% {
+    opacity: 0;
+  }
 }
