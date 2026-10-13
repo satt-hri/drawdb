@@ -722,37 +722,49 @@ export default function Canvas() {
     (e) => {
       e.preventDefault();
 
+      // firefox may report the delta in lines or pages instead of pixels
+      const deltaScale =
+        e.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 16
+          : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? 800
+            : 1;
+      const deltaX = e.deltaX * deltaScale;
+      const deltaY = e.deltaY * deltaScale;
+
       if (e.ctrlKey || e.metaKey) {
-        const eagernessFactor = 0.05;
+        // mouse wheels send large integer steps and keep the fixed 5% zoom,
+        // trackpad pinches send many small deltas and zoom proportionally
+        const isMouseWheel =
+          e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
+          (Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 50);
+        const factor = isMouseWheel
+          ? deltaY <= 0
+            ? 1.05
+            : 1 / 1.05
+          : Math.exp(-Math.max(-50, Math.min(50, deltaY)) * 0.01);
+        // keep the point under the cursor fixed while zooming
         setTransform((prev) => ({
           pan: {
             x:
-              prev.pan.x -
-              (pointer.spaces.diagram.x - prev.pan.x) *
-                eagernessFactor *
-                Math.sign(e.deltaY),
+              pointer.spaces.diagram.x -
+              (pointer.spaces.diagram.x - prev.pan.x) / factor,
             y:
-              prev.pan.y -
-              (pointer.spaces.diagram.y - prev.pan.y) *
-                eagernessFactor *
-                Math.sign(e.deltaY),
+              pointer.spaces.diagram.y -
+              (pointer.spaces.diagram.y - prev.pan.y) / factor,
           },
-          zoom: e.deltaY <= 0 ? prev.zoom * 1.05 : prev.zoom / 1.05,
-        }));
-      } else if (e.shiftKey) {
-        setTransform((prev) => ({
-          ...prev,
-          pan: {
-            ...prev.pan,
-            x: prev.pan.x + e.deltaY / prev.zoom,
-          },
+          zoom: prev.zoom * factor,
         }));
       } else {
+        // trackpads scroll in both directions, shift+wheel scrolls sideways
+        const swap = e.shiftKey && deltaX === 0;
+        const dx = swap ? deltaY : deltaX;
+        const dy = swap ? 0 : deltaY;
         setTransform((prev) => ({
           ...prev,
           pan: {
-            ...prev.pan,
-            y: prev.pan.y + e.deltaY / prev.zoom,
+            x: prev.pan.x + dx / prev.zoom,
+            y: prev.pan.y + dy / prev.zoom,
           },
         }));
       }
