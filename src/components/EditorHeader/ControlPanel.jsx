@@ -659,6 +659,8 @@ export default function ControlPanel({
         y: prev.pan.y + dy / prev.zoom,
       },
     }));
+  const resetZoom = () => setTransform((prev) => ({ ...prev, zoom: 1 }));
+
   const findElement = ({ id, type }) => {
     switch (type) {
       case ObjectType.TABLE:
@@ -766,8 +768,25 @@ export default function ControlPanel({
   };
   const resetView = () =>
     setTransform((prev) => ({ ...prev, zoom: 1, pan: { x: 0, y: 0 } }));
-  const fitWindow = () => fitToView(tables);
-  const fitToView = (tablesToFit) => {
+  const fitWindow = () => fitToView();
+  const zoomToSelection = () => {
+    const selection = getSelection();
+    if (selection.length === 0) return;
+    const selected = (type) =>
+      selection.filter((el) => el.type === type).map(findElement);
+    fitToView({
+      tables: selected(ObjectType.TABLE),
+      views: selected(ObjectType.VIEW),
+      areas: selected(ObjectType.AREA),
+      notes: selected(ObjectType.NOTE),
+    });
+  };
+  const fitToView = ({
+    tables: tablesToFit = tables,
+    views: viewsToFit = views,
+    areas: areasToFit = areas,
+    notes: notesToFit = notes,
+  } = {}) => {
     const canvas = document.getElementById("canvas").getBoundingClientRect();
 
     const minMaxXY = {
@@ -787,7 +806,7 @@ export default function ControlPanel({
       );
     });
 
-    views.forEach((view) => {
+    viewsToFit.forEach((view) => {
       minMaxXY.minX = Math.min(minMaxXY.minX, view.x);
       minMaxXY.minY = Math.min(minMaxXY.minY, view.y);
       minMaxXY.maxX = Math.max(minMaxXY.maxX, view.x + getViewWidth(view));
@@ -802,14 +821,14 @@ export default function ControlPanel({
       );
     });
 
-    areas.forEach((area) => {
+    areasToFit.forEach((area) => {
       minMaxXY.minX = Math.min(minMaxXY.minX, area.x);
       minMaxXY.minY = Math.min(minMaxXY.minY, area.y);
       minMaxXY.maxX = Math.max(minMaxXY.maxX, area.x + area.width);
       minMaxXY.maxY = Math.max(minMaxXY.maxY, area.y + area.height);
     });
 
-    notes.forEach((note) => {
+    notesToFit.forEach((note) => {
       minMaxXY.minX = Math.min(minMaxXY.minX, note.x);
       minMaxXY.minY = Math.min(minMaxXY.minY, note.y);
       minMaxXY.maxX = Math.max(
@@ -818,6 +837,9 @@ export default function ControlPanel({
       );
       minMaxXY.maxY = Math.max(minMaxXY.maxY, note.y + note.height);
     });
+
+    // nothing to fit
+    if (minMaxXY.minX === Infinity) return;
 
     const padding = 10;
     const width = minMaxXY.maxX - minMaxXY.minX + padding;
@@ -869,7 +891,7 @@ export default function ControlPanel({
       },
     ]);
     setRedoStack([]);
-    fitToView(arrangedTables);
+    fitToView({ tables: arrangedTables });
   };
   const autoConnectFKs = () => {
     if (layout.readOnly) return;
@@ -1988,11 +2010,11 @@ export default function ControlPanel({
       },
       zoom_in: {
         function: zoomIn,
-        shortcut: "Ctrl+(Up/Wheel)",
+        shortcut: "Ctrl+(=/Up/Wheel)",
       },
       zoom_out: {
         function: zoomOut,
-        shortcut: "Ctrl+(Down/Wheel)",
+        shortcut: "Ctrl+(-/Down/Wheel)",
       },
       fullscreen: {
         state: fullscreen ? (
@@ -2082,8 +2104,16 @@ export default function ControlPanel({
   useHotkeys("mod+a", selectAll, EDITOR_HOTKEY);
   useHotkeys("escape", deselect, EDITOR_HOTKEY);
   useHotkeys("mod+shift+g", viewGrid, EDITOR_HOTKEY);
-  useHotkeys("mod+up", zoomIn, EDITOR_HOTKEY);
-  useHotkeys("mod+down", zoomOut, EDITOR_HOTKEY);
+  // matched by physical key: "+" is on the semicolon key on JIS keyboards
+  useHotkeys(
+    "mod+up, mod+equal, mod+shift+equal, mod+semicolon, mod+shift+semicolon, mod+add",
+    zoomIn,
+    EDITOR_HOTKEY,
+  );
+  useHotkeys("mod+down, mod+minus, mod+subtract", zoomOut, EDITOR_HOTKEY);
+  useHotkeys("shift+0", resetZoom, EDITOR_HOTKEY);
+  useHotkeys("shift+1", fitWindow, EDITOR_HOTKEY);
+  useHotkeys("shift+2", zoomToSelection, EDITOR_HOTKEY);
   useHotkeys("mod+shift+m", viewStrictMode, EDITOR_HOTKEY);
   useHotkeys("mod+shift+f", viewFieldSummary, EDITOR_HOTKEY);
   useHotkeys("mod+shift+s", saveDiagramAs, EDITOR_HOTKEY);
@@ -2202,7 +2232,7 @@ export default function ControlPanel({
                   style={{ display: "flex", justifyContent: "space-between" }}
                 >
                   <div>{t("fit_window_reset")}</div>
-                  <div className="text-gray-400">Ctrl+Alt+W</div>
+                  <div className="text-gray-400">Shift+1</div>
                 </Dropdown.Item>
                 <Dropdown.Divider />
                 {[0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0].map((e, i) => (
