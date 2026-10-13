@@ -79,6 +79,11 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
   const { notes, setNotes } = useNotes();
   const { saveState, setSaveState } = useSaveState();
   const { transform, setTransform } = useTransform();
+  // read by save() through a ref: if `save` depended on the transform it
+  // would be recreated on every pan frame, and while a save is in progress
+  // that re-runs the save effect and starts a new write for each frame
+  const transformRef = useRef(transform);
+  transformRef.current = transform;
   const { enums, setEnums } = useEnums();
   const { views, setViews } = useViews();
   const {
@@ -122,8 +127,8 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       notes,
       areas,
       views,
-      pan: transform.pan,
-      zoom: transform.zoom,
+      pan: transformRef.current.pan,
+      zoom: transformRef.current.zoom,
       ...(databases[database].hasEnums && { enums }),
       ...(databases[database].hasTypes && { types }),
     }),
@@ -136,7 +141,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       notes,
       areas,
       views,
-      transform,
       enums,
       types,
     ],
@@ -188,8 +192,8 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           notes: notes,
           areas: areas,
           views: views,
-          pan: transform.pan,
-          zoom: transform.zoom,
+          pan: transformRef.current.pan,
+          zoom: transformRef.current.zoom,
           loadedFromGistId: loadedFromGistId,
           ...(databases[database].hasEnums && { enums: enums }),
           ...(databases[database].hasTypes && { types: types }),
@@ -213,8 +217,8 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           areas: areas,
           views: views,
           gistId: gistId ?? "",
-          pan: transform.pan,
-          zoom: transform.zoom,
+          pan: transformRef.current.pan,
+          zoom: transformRef.current.zoom,
           loadedFromGistId: loadedFromGistId,
           ...(databases[database].hasEnums && { enums: enums }),
           ...(databases[database].hasTypes && { types: types }),
@@ -238,7 +242,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     views,
     types,
     title,
-    transform,
     setSaveState,
     setLastSaved,
     database,
