@@ -1,12 +1,19 @@
-import { createContext, useCallback, useState } from "react";
+import { createContext, useCallback, useRef, useState } from "react";
 
 export const TransformContext = createContext(null);
+// A ref that always holds the latest transform. Its value never changes, so
+// reading it doesn't re-render on every pan frame, unlike TransformContext.
+export const TransformRefContext = createContext({ current: null });
+// setTransform alone, which is stable, for components that only change the transform
+export const SetTransformContext = createContext(() => {});
 
 export default function TransformContextProvider({ children }) {
   const [transform, setTransformInternal] = useState({
     zoom: 1,
     pan: { x: 0, y: 0 },
   });
+  const transformRef = useRef(transform);
+  transformRef.current = transform;
 
   /**
    * @type {typeof DrawDB.TransformContext["setTransform"]}
@@ -40,7 +47,11 @@ export default function TransformContextProvider({ children }) {
 
   return (
     <TransformContext.Provider value={{ transform, setTransform }}>
-      {children}
+      <TransformRefContext.Provider value={transformRef}>
+        <SetTransformContext.Provider value={setTransform}>
+          {children}
+        </SetTransformContext.Provider>
+      </TransformRefContext.Provider>
     </TransformContext.Provider>
   );
 }

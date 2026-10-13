@@ -5,7 +5,7 @@ import {
   defaultNoteTheme,
   noteWidth,
 } from "../data/constants";
-import { useUndoRedo, useTransform, useSelect, useCollab } from "../hooks";
+import { useUndoRedo, useTransformRef, useSelect, useCollab } from "../hooks";
 import { Toast } from "@douyinfe/semi-ui";
 import { cascadePosition } from "../utils/rect";
 import { useTranslation } from "react-i18next";
@@ -15,7 +15,8 @@ export const NotesContext = createContext(null);
 export default function NotesContextProvider({ children }) {
   const { t } = useTranslation();
   const [notes, setNotes] = useState([]);
-  const { transform } = useTransform();
+  // only read when a new element is placed, see useTransformRef
+  const transformRef = useTransformRef();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { selectedElement, setSelectedElement } = useSelect();
   const { emitDelta, isApplyingRemoteRef } = useCollab();
@@ -34,7 +35,10 @@ export default function NotesContextProvider({ children }) {
       created = {
         id: notes.length,
         ...cascadePosition(
-          { x: transform.pan.x, y: transform.pan.y - height / 2 },
+          {
+            x: transformRef.current.pan.x,
+            y: transformRef.current.pan.y - height / 2,
+          },
           notes,
         ),
         title: `note_${notes.length}`,

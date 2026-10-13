@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import {
   Action,
   Tab,
@@ -33,7 +33,6 @@ import {
   useDiagram,
   useSelect,
   useUndoRedo,
-  useTransform,
 } from "../../hooks";
 import TableInfo from "../EditorSidePanel/TablesTab/TableInfo";
 import { useTranslation } from "react-i18next";
@@ -51,8 +50,9 @@ import {
 } from "../../utils/utils";
 import ResizeHandles from "./ResizeHandles";
 
-export default function Table({
+function Table({
   tableData,
+  zoom,
   onPointerDown,
   setHoveredTable,
   handleGripField,
@@ -73,14 +73,17 @@ export default function Table({
   } = useDiagram();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { settings } = useSettings();
-  const { transform } = useTransform();
   const { t } = useTranslation();
   const {
     selectedElement,
     setSelectedElement,
     bulkSelectedElements,
     setBulkSelectedElements,
+    focusFlash,
   } = useSelect();
+
+  const isFlashing =
+    focusFlash?.type === ObjectType.TABLE && focusFlash.id === tableData.id;
 
   const borderColor = useMemo(
     () => (settings.mode === "light" ? "border-zinc-300" : "border-zinc-600"),
@@ -281,6 +284,273 @@ export default function Table({
     setRedoStack([]);
   };
 
+  // Rendering the fields (with a popover each) is the expensive part of a table.
+  // Keep it memoized so that panning, or dragging another table, which re-render
+  // every table through the contexts, don't rebuild it.
+  const latest = useRef(null);
+  latest.current = {
+    openEditor,
+    lockUnlockTable,
+    toggleTableCollapse,
+    duplicateTable,
+    deleteTable,
+    deleteField,
+    handleGripField,
+  };
+  const referencesKey = visibleFieldEntries
+    .map(({ field }) => {
+      const reference = getFieldReference(field);
+      return reference ? `${reference.tableName}.${reference.fieldName}` : "";
+    })
+    .join("|");
+  const content = useMemo(
+    () => (
+      <div
+        onDoubleClick={(e) => latest.current.openEditor(e)}
+        className={`border-2 hover:border-dashed hover:border-blue-500
+                   select-none rounded-lg w-full ${
+                     settings.mode === "light"
+                       ? "bg-zinc-100 text-zinc-800"
+                       : "bg-zinc-800 text-zinc-200"
+                   } ${
+                     resizeEngaged
+                       ? "border-dashed border-blue-500"
+                       : isSelected
+                         ? "border-solid border-blue-500"
+                         : borderColor
+                   }`}
+        style={{ direction: "ltr" }}
+      >
+        <div
+          className="h-[10px] w-full rounded-t-md"
+          style={{ backgroundColor: tableData.color }}
+        />
+        <div
+          className={`${
+            visibleFieldEntries.length === 0
+              ? "rounded-b-md"
+              : "border-b border-gray-400"
+          } ${
+            settings.mode === "light" ? "bg-zinc-100" : "bg-zinc-900"
+          } ${tableData.comment && settings.showComments ? "pb-3" : ""}`}
+        >
+          <div
+            className={`overflow-hidden font-bold h-[40px] flex justify-between items-center gap-2`}
+          >
+            <div className="px-3 overflow-hidden text-ellipsis whitespace-nowrap min-w-0 flex-1">
+              {tableData.name}
+            </div>
+            <div className="hidden group-hover:flex items-center shrink-0 pe-2">
+              <ButtonGroup
+                type="tertiary"
+                size="small"
+                aria-label={t("table_actions")}
+              >
+                <Button
+                  size="small"
+                  type="tertiary"
+                  title={tableData.locked ? t("unlock_table") : t("lock_table")}
+                  icon={
+                    tableData.locked ? (
+                      <IconLock size="small" />
+                    ) : (
+                      <IconUnlock size="small" />
+                    )
+                  }
+                  disabled={layout.readOnly}
+                  onClick={(e) => latest.current.lockUnlockTable(e)}
+                />
+                <Button
+                  size="small"
+                  type="tertiary"
+                  icon={
+                    tableData.collapsed ? (
+                      <IconChevronDown size="small" />
+                    ) : (
+                      <IconChevronUp size="small" />
+                    )
+                  }
+                  disabled={layout.readOnly}
+                  aria-label={
+                    tableData.collapsed
+                      ? t("expand_unlinked_columns")
+                      : t("collapse_unlinked_columns")
+                  }
+                  title={
+                    tableData.collapsed
+                      ? t("expand_unlinked_columns")
+                      : t("collapse_unlinked_columns")
+                  }
+                  onClick={(e) => latest.current.toggleTableCollapse(e)}
+                  onPointerDown={(e) => e.stopPropagation()}
+                />
+                <Popover
+                  key={tableData.id}
+                  content={
+                    <div className="popover-theme flex flex-col py-1 min-w-[160px]">
+                      <Button
+                        icon={<IconEditStroked />}
+                        type="tertiary"
+                        theme="borderless"
+                        block
+                        style={{ justifyContent: "flex-start" }}
+                        onClick={(e) => latest.current.openEditor(e)}
+                      >
+                        {t("edit")}
+                      </Button>
+                      <Button
+                        icon={<IconCopyStroked />}
+                        type="tertiary"
+                        theme="borderless"
+                        block
+                        style={{ justifyContent: "flex-start" }}
+                        onClick={(e) => latest.current.duplicateTable(e)}
+                        disabled={layout.readOnly}
+                      >
+                        {t("duplicate")}
+                      </Button>
+                      <Divider className="!my-1" />
+                      <Button
+                        icon={<IconDeleteStroked />}
+                        type="danger"
+                        theme="borderless"
+                        block
+                        style={{ justifyContent: "flex-start" }}
+                        onClick={() => latest.current.deleteTable(tableData.id)}
+                        disabled={layout.readOnly}
+                      >
+                        {t("delete")}
+                      </Button>
+                    </div>
+                  }
+                  position="rightTop"
+                  style={{ padding: 8 }}
+                  showArrow
+                  trigger="click"
+                >
+                  <Button
+                    size="small"
+                    type="tertiary"
+                    icon={<IconMore size="small" />}
+                    title={t("see_more")}
+                  />
+                </Popover>
+              </ButtonGroup>
+            </div>
+          </div>
+          {tableData.comment && settings.showComments && (
+            <div className="text-xs px-3 line-clamp-5">{tableData.comment}</div>
+          )}
+        </div>
+
+        {visibleFieldEntries.map(({ field: e }, i) => {
+          const resolved = resolveType(database, e.type);
+          const reference = getFieldReference(e);
+          return settings.showFieldSummary ? (
+            <Popover
+              key={e.id ?? i}
+              content={
+                <div className="popover-theme">
+                  <div
+                    className="flex justify-between items-center pb-2"
+                    style={{ direction: "ltr" }}
+                  >
+                    <p className="me-4 font-bold">{e.name}</p>
+                    <p
+                      className={
+                        "ms-4 font-mono " +
+                        (resolved.isCustom ? "" : resolved.color)
+                      }
+                      style={resolved.isCustom ? { color: resolved.color } : {}}
+                    >
+                      {e.type +
+                        ((resolved.isSized || resolved.hasPrecision) &&
+                        e.size &&
+                        e.size !== ""
+                          ? "(" + e.size + ")"
+                          : "")}
+                    </p>
+                  </div>
+                  <hr />
+                  {e.primary && (
+                    <Tag color="blue" className="me-2 my-2">
+                      {t("primary_key")}
+                    </Tag>
+                  )}
+                  {e.unique && (
+                    <Tag color="amber" className="me-2 my-2">
+                      {t("unique")}
+                    </Tag>
+                  )}
+                  {e.notNull && (
+                    <Tag color="purple" className="me-2 my-2">
+                      {t("not_null")}
+                    </Tag>
+                  )}
+                  {e.increment && (
+                    <Tag color="green" className="me-2 my-2">
+                      {t("autoincrement")}
+                    </Tag>
+                  )}
+                  {reference && (
+                    <Tag color="light-blue" className="me-2 my-2">
+                      {t("foreign_key")}
+                    </Tag>
+                  )}
+                  {reference && (
+                    <p>
+                      <strong>{t("references")}: </strong>
+                      {reference.tableName}({reference.fieldName})
+                    </p>
+                  )}
+                  <p>
+                    <strong>{t("default_value")}: </strong>
+                    {e.default === "" ? t("not_set") : e.default}
+                  </p>
+                  <p className="max-w-80">
+                    <strong>{t("comment")}: </strong>
+                    {e.comment === "" ? t("not_set") : e.comment}
+                  </p>
+                </div>
+              }
+              position="right"
+              showArrow
+              style={
+                isRtl(i18n.language)
+                  ? { direction: "rtl" }
+                  : { direction: "ltr" }
+              }
+            >
+              {field(e, i)}
+            </Popover>
+          ) : (
+            field(e, i)
+          );
+        })}
+      </div>
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      tableData,
+      isSelected,
+      resizeEngaged,
+      hoveredField,
+      borderColor,
+      settings.mode,
+      settings.showComments,
+      settings.showFieldSummary,
+      settings.showDataTypes,
+      layout.readOnly,
+      database,
+      visibleFieldEntries,
+      visibleFields,
+      width,
+      referencesKey,
+      t,
+      i18n.language,
+    ],
+  );
+
   if (tableData.hidden) return null;
 
   return (
@@ -292,245 +562,31 @@ export default function Table({
         width={width}
         height={height}
         className="group drop-shadow-lg rounded-md cursor-move"
-        onPointerDown={onPointerDown}
+        onPointerDown={() => onPointerDown(tableData)}
         onPointerEnter={(e) => e.isPrimary && setHovered(true)}
         onPointerLeave={(e) => e.isPrimary && setHovered(false)}
       >
-        <div
-          onDoubleClick={openEditor}
-          className={`border-2 hover:border-dashed hover:border-blue-500
-               select-none rounded-lg w-full ${
-                 settings.mode === "light"
-                   ? "bg-zinc-100 text-zinc-800"
-                   : "bg-zinc-800 text-zinc-200"
-               } ${
-                 resizeEngaged
-                   ? "border-dashed border-blue-500"
-                   : isSelected
-                     ? "border-solid border-blue-500"
-                     : borderColor
-               }`}
-          style={{ direction: "ltr" }}
-        >
-          <div
-            className="h-[10px] w-full rounded-t-md"
-            style={{ backgroundColor: tableData.color }}
-          />
-          <div
-            className={`${
-              visibleFieldEntries.length === 0
-                ? "rounded-b-md"
-                : "border-b border-gray-400"
-            } ${
-              settings.mode === "light" ? "bg-zinc-100" : "bg-zinc-900"
-            } ${tableData.comment && settings.showComments ? "pb-3" : ""}`}
-          >
-            <div
-              className={`overflow-hidden font-bold h-[40px] flex justify-between items-center gap-2`}
-            >
-              <div className="px-3 overflow-hidden text-ellipsis whitespace-nowrap min-w-0 flex-1">
-                {tableData.name}
-              </div>
-              <div className="hidden group-hover:flex items-center shrink-0 pe-2">
-                <ButtonGroup
-                  type="tertiary"
-                  size="small"
-                  aria-label={t("table_actions")}
-                >
-                  <Button
-                    size="small"
-                    type="tertiary"
-                    title={tableData.locked ? t("unlock_table") : t("lock_table")}
-                    icon={
-                      tableData.locked ? (
-                        <IconLock size="small" />
-                      ) : (
-                        <IconUnlock size="small" />
-                      )
-                    }
-                    disabled={layout.readOnly}
-                    onClick={lockUnlockTable}
-                  />
-                  <Button
-                    size="small"
-                    type="tertiary"
-                    icon={
-                      tableData.collapsed ? (
-                        <IconChevronDown size="small" />
-                      ) : (
-                        <IconChevronUp size="small" />
-                      )
-                    }
-                    disabled={layout.readOnly}
-                    aria-label={
-                      tableData.collapsed
-                        ? t("expand_unlinked_columns")
-                        : t("collapse_unlinked_columns")
-                    }
-                    title={
-                      tableData.collapsed
-                        ? t("expand_unlinked_columns")
-                        : t("collapse_unlinked_columns")
-                    }
-                    onClick={toggleTableCollapse}
-                    onPointerDown={(e) => e.stopPropagation()}
-                  />
-                  <Popover
-                    key={tableData.id}
-                    content={
-                      <div className="popover-theme flex flex-col py-1 min-w-[160px]">
-                        <Button
-                          icon={<IconEditStroked />}
-                          type="tertiary"
-                          theme="borderless"
-                          block
-                          style={{ justifyContent: "flex-start" }}
-                          onClick={openEditor}
-                        >
-                          {t("edit")}
-                        </Button>
-                        <Button
-                          icon={<IconCopyStroked />}
-                          type="tertiary"
-                          theme="borderless"
-                          block
-                          style={{ justifyContent: "flex-start" }}
-                          onClick={duplicateTable}
-                          disabled={layout.readOnly}
-                        >
-                          {t("duplicate")}
-                        </Button>
-                        <Divider className="!my-1" />
-                        <Button
-                          icon={<IconDeleteStroked />}
-                          type="danger"
-                          theme="borderless"
-                          block
-                          style={{ justifyContent: "flex-start" }}
-                          onClick={() => deleteTable(tableData.id)}
-                          disabled={layout.readOnly}
-                        >
-                          {t("delete")}
-                        </Button>
-                      </div>
-                    }
-                    position="rightTop"
-                    style={{ padding: 8 }}
-                    showArrow
-                    trigger="click"
-                  >
-                    <Button
-                      size="small"
-                      type="tertiary"
-                      icon={<IconMore size="small" />}
-                      title={t("see_more")}
-                    />
-                  </Popover>
-                </ButtonGroup>
-              </div>
-            </div>
-            {tableData.comment && settings.showComments && (
-              <div className="text-xs px-3 line-clamp-5">
-                {tableData.comment}
-              </div>
-            )}
-          </div>
-
-          {visibleFieldEntries.map(({ field: e }, i) => {
-            const resolved = resolveType(database, e.type);
-            const reference = getFieldReference(e);
-            return settings.showFieldSummary ? (
-              <Popover
-                key={e.id ?? i}
-                content={
-                  <div className="popover-theme">
-                    <div
-                      className="flex justify-between items-center pb-2"
-                      style={{ direction: "ltr" }}
-                    >
-                      <p className="me-4 font-bold">{e.name}</p>
-                      <p
-                        className={
-                          "ms-4 font-mono " +
-                          (resolved.isCustom ? "" : resolved.color)
-                        }
-                        style={
-                          resolved.isCustom ? { color: resolved.color } : {}
-                        }
-                      >
-                        {e.type +
-                          ((resolved.isSized || resolved.hasPrecision) &&
-                          e.size &&
-                          e.size !== ""
-                            ? "(" + e.size + ")"
-                            : "")}
-                      </p>
-                    </div>
-                    <hr />
-                    {e.primary && (
-                      <Tag color="blue" className="me-2 my-2">
-                        {t("primary_key")}
-                      </Tag>
-                    )}
-                    {e.unique && (
-                      <Tag color="amber" className="me-2 my-2">
-                        {t("unique")}
-                      </Tag>
-                    )}
-                    {e.notNull && (
-                      <Tag color="purple" className="me-2 my-2">
-                        {t("not_null")}
-                      </Tag>
-                    )}
-                    {e.increment && (
-                      <Tag color="green" className="me-2 my-2">
-                        {t("autoincrement")}
-                      </Tag>
-                    )}
-                    {reference && (
-                      <Tag color="light-blue" className="me-2 my-2">
-                        {t("foreign_key")}
-                      </Tag>
-                    )}
-                    {reference && (
-                      <p>
-                        <strong>{t("references")}: </strong>
-                        {reference.tableName}({reference.fieldName})
-                      </p>
-                    )}
-                    <p>
-                      <strong>{t("default_value")}: </strong>
-                      {e.default === "" ? t("not_set") : e.default}
-                    </p>
-                    <p className="max-w-80">
-                      <strong>{t("comment")}: </strong>
-                      {e.comment === "" ? t("not_set") : e.comment}
-                    </p>
-                  </div>
-                }
-                position="right"
-                showArrow
-                style={
-                  isRtl(i18n.language)
-                    ? { direction: "rtl" }
-                    : { direction: "ltr" }
-                }
-              >
-                {field(e, i)}
-              </Popover>
-            ) : (
-              field(e, i)
-            );
-          })}
-        </div>
+        {content}
       </foreignObject>
+      {isFlashing && (
+        // keyed so that picking the same table again restarts the animation
+        <rect
+          key={focusFlash.key}
+          x={tableData.x - 6}
+          y={tableData.y - 6}
+          width={width + 12}
+          height={height + 12}
+          rx={12}
+          className="table-focus-flash pointer-events-none"
+        />
+      )}
       {!layout.readOnly && !tableData.locked && (
         <ResizeHandles
           x={tableData.x}
           y={tableData.y}
           width={width}
           height={height}
-          zoom={transform.zoom}
+          zoom={zoom}
           visible={hovered}
           onResize={resizeTable}
           onResizeEnd={commitResize}
@@ -604,7 +660,7 @@ export default function Table({
               onPointerDown={(e) => {
                 if (!e.isPrimary) return;
 
-                handleGripField();
+                latest.current.handleGripField();
                 const fieldY =
                   tableData.y +
                   getFieldOffsetY(
@@ -648,7 +704,7 @@ export default function Table({
                 disabled={layout.readOnly}
                 onClick={() => {
                   if (layout.readOnly) return;
-                  deleteField(fieldData, tableData.id);
+                  latest.current.deleteField(fieldData, tableData.id);
                 }}
               />
             ) : settings.showDataTypes ? (
@@ -688,3 +744,5 @@ export default function Table({
     );
   }
 }
+
+export default memo(Table);

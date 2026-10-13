@@ -8,6 +8,7 @@ import {
   useLayout,
   useUndoRedo,
   useSettings,
+  useFocusTable,
 } from "../../../hooks";
 import { Action, ObjectType, State } from "../../../data/constants";
 import { useTranslation } from "react-i18next";
@@ -23,6 +24,7 @@ export default function TablesTab() {
   const { t } = useTranslation();
   const { layout } = useLayout();
   const { setSaveState } = useSaveState();
+  const focusTable = useFocusTable();
 
   return (
     <>
@@ -50,14 +52,16 @@ export default function TablesTab() {
           }
           keepDOM={false}
           lazyRender
-          onChange={(k) =>
+          onChange={(k) => {
             setSelectedElement((prev) => ({
               ...prev,
               open: true,
               id: k[0],
               element: ObjectType.TABLE,
-            }))
-          }
+            }));
+            // bring the opened table into view on the canvas
+            if (k[0]) focusTable(k[0]);
+          }}
           accordion
         >
           <SortableList
