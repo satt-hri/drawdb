@@ -33,6 +33,7 @@ import {
 } from "../../hooks";
 import { useTranslation } from "react-i18next";
 import { useEventListener } from "usehooks-ts";
+import { useHotkeys } from "react-hotkeys-hook";
 import {
   areFieldsCompatible,
   getTableHeight,
@@ -126,6 +127,7 @@ export default function Canvas() {
     panStart: { x: 0, y: 0 },
     cursorStart: { x: 0, y: 0 },
   });
+  const [spacePressed, setSpacePressed] = useState(false);
   const [areaResize, setAreaResize] = useState({ id: -1, dir: "none" });
   const [areaInitDimensions, setAreaInitDimensions] = useState({
     x: 0,
@@ -599,7 +601,7 @@ export default function Canvas() {
       if (e.button === 2) rightClickPanned.current = true;
     }
     setPanning((old) => ({ ...old, isPanning: false }));
-    pointer.setStyle("default");
+    pointer.setStyle(spacePressed ? "grab" : "default");
 
     if (linking) handleLinking();
     setLinking(false);
@@ -756,6 +758,46 @@ export default function Canvas() {
     { passive: false },
   );
 
+  // hold space to pan with the left mouse button, like in figma.
+  // react-hotkeys-hook ignores events from inputs and textareas by default
+  useHotkeys(
+    "space",
+    (e) => {
+      const pressed = e.type === "keydown";
+      setSpacePressed(pressed);
+      if (!panning.isPanning) pointer.setStyle(pressed ? "grab" : "default");
+    },
+    {
+      keydown: true,
+      keyup: true,
+      preventDefault: true,
+      ignoreEventWhen: (e) => Boolean(e.target?.closest?.(".monaco-editor")),
+    },
+  );
+
+  // keyup is never received if the window loses focus while space is held
+  useEventListener("blur", () => {
+    setSpacePressed(false);
+    if (!panning.isPanning) pointer.setStyle("default");
+  });
+
+  /**
+   * Runs in the capture phase so that tables, notes, areas and their
+   * handles don't start dragging, resizing or linking while space is held.
+   * @param {PointerEvent} e
+   */
+  const handlePointerDownCapture = (e) => {
+    if (!spacePressed || !e.isPrimary || e.button !== 0) return;
+    if (selectedElement.open && !layout.sidebar) return;
+    e.stopPropagation();
+    setPanning({
+      isPanning: true,
+      panStart: transform.pan,
+      cursorStart: pointer.spaces.screen,
+    });
+    pointer.setStyle("grabbing");
+  };
+
   return (
     <div className="grow h-full touch-none" id="canvas">
       <div
@@ -769,6 +811,7 @@ export default function Canvas() {
           id="diagram"
           ref={canvasRef}
           onPointerMove={handlePointerMove}
+          onPointerDownCapture={handlePointerDownCapture}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onContextMenu={(e) => {
