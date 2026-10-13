@@ -738,10 +738,58 @@ export default function ControlPanel({
     setBulkSelectedElements([]);
   };
 
-  const panLeft = () => panBy(-keyboardPanStep, 0);
-  const panRight = () => panBy(keyboardPanStep, 0);
-  const panUp = () => panBy(0, -keyboardPanStep);
-  const panDown = () => panBy(0, keyboardPanStep);
+  // move the selected elements like in figma, or pan the canvas if nothing is selected
+  const nudgeOrPan = (dx, dy, step) => {
+    const selection = layout.readOnly
+      ? []
+      : getSelection().filter((el) => !findElement(el).locked);
+
+    if (selection.length === 0) {
+      panBy(dx * keyboardPanStep, dy * keyboardPanStep);
+      return;
+    }
+
+    const elements = selection.map((el) => {
+      const { x, y } = findElement(el);
+      return {
+        id: el.id,
+        type: el.type,
+        undo: { x, y },
+        redo: { x: x + dx * step, y: y + dy * step },
+      };
+    });
+
+    const updaters = {
+      [ObjectType.TABLE]: updateTable,
+      [ObjectType.VIEW]: updateView,
+      [ObjectType.AREA]: updateArea,
+      [ObjectType.NOTE]: updateNote,
+    };
+    elements.forEach((el) => updaters[el.type](el.id, el.redo));
+    setUndoStack((prev) => [
+      ...prev,
+      {
+        action: Action.MOVE,
+        bulk: true,
+        message: t("bulk_update"),
+        elements,
+      },
+    ]);
+    setRedoStack([]);
+    setBulkSelectedElements((prev) =>
+      prev.map((el) => {
+        const moved = elements.find(
+          (m) => m.id === el.id && m.type === el.type,
+        );
+        if (!moved) return el;
+        return {
+          ...el,
+          currentCoords: { ...moved.redo },
+          initialCoords: { ...moved.redo },
+        };
+      }),
+    );
+  };
   const viewStrictMode = () => {
     setSettings((prev) => ({ ...prev, strictMode: !prev.strictMode }));
   };
@@ -2122,10 +2170,14 @@ export default function ControlPanel({
   useHotkeys("mod+h", () => window.open(socials.docs, "_blank"), EDITOR_HOTKEY);
   useHotkeys("mod+alt+w", fitWindow, EDITOR_HOTKEY);
   useHotkeys("alt+e", toggleDBMLEditor, EDITOR_HOTKEY);
-  useHotkeys("left", panLeft, EDITOR_HOTKEY);
-  useHotkeys("right", panRight, EDITOR_HOTKEY);
-  useHotkeys("up", panUp, EDITOR_HOTKEY);
-  useHotkeys("down", panDown, EDITOR_HOTKEY);
+  useHotkeys("left", () => nudgeOrPan(-1, 0, 1), EDITOR_HOTKEY);
+  useHotkeys("right", () => nudgeOrPan(1, 0, 1), EDITOR_HOTKEY);
+  useHotkeys("up", () => nudgeOrPan(0, -1, 1), EDITOR_HOTKEY);
+  useHotkeys("down", () => nudgeOrPan(0, 1, 1), EDITOR_HOTKEY);
+  useHotkeys("shift+left", () => nudgeOrPan(-1, 0, 10), EDITOR_HOTKEY);
+  useHotkeys("shift+right", () => nudgeOrPan(1, 0, 10), EDITOR_HOTKEY);
+  useHotkeys("shift+up", () => nudgeOrPan(0, -1, 10), EDITOR_HOTKEY);
+  useHotkeys("shift+down", () => nudgeOrPan(0, 1, 10), EDITOR_HOTKEY);
 
   return (
     <>

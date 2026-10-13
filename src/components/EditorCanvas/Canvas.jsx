@@ -262,7 +262,10 @@ export default function Canvas() {
 
     if (!e.isPrimary) return;
 
-    if (!element.locked || !(e.ctrlKey || e.metaKey)) {
+    // shift+click adds to the selection like in figma, ctrl/cmd+click still works
+    const isAdditive = e.ctrlKey || e.metaKey || e.shiftKey;
+
+    if (!element.locked || !isAdditive) {
       setSelectedElement((prev) => ({
         ...prev,
         element: type,
@@ -272,7 +275,7 @@ export default function Canvas() {
     }
 
     if (element.locked) {
-      if (!(e.ctrlKey || e.metaKey)) {
+      if (!isAdditive) {
         setBulkSelectedElements([]);
       }
       return;
@@ -296,7 +299,7 @@ export default function Canvas() {
       isSameElement(el, elementInBulk),
     );
 
-    if (e.ctrlKey || e.metaKey) {
+    if (isAdditive) {
       if (isSelected) {
         if (bulkSelectedElements.length > 1) {
           setBulkSelectedElements(
@@ -503,7 +506,7 @@ export default function Canvas() {
         x2: pointer.spaces.diagram.x,
         y2: pointer.spaces.diagram.y,
         show: elementPointerDown === null || !elementPointerDown.element.locked,
-        ctrlKey: e.ctrlKey,
+        ctrlKey: e.ctrlKey || e.shiftKey,
         metaKey: e.metaKey,
       });
       if (elementPointerDown !== null) {
