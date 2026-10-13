@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useSelect } from "../../../hooks";
+import { useFocusTable, useSelect } from "../../../hooks";
 import { TreeSelect } from "@douyinfe/semi-ui";
 import { IconSearch } from "@douyinfe/semi-icons";
 import { ObjectType } from "../../../data/constants";
@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 
 export default function SearchBar({ tables }) {
   const { setSelectedElement } = useSelect();
+  const focusTable = useFocusTable();
   const { t } = useTranslation();
 
   const treeData = useMemo(() => {
@@ -48,6 +49,7 @@ export default function SearchBar({ tables }) {
           open: true,
           element: ObjectType.TABLE,
         }));
+        focusTable(tableId);
         document
           .getElementById(`scroll_table_${tableId}`)
           .scrollIntoView({ behavior: "smooth" });

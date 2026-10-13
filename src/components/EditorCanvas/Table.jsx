@@ -80,7 +80,11 @@ export default function Table({
     setSelectedElement,
     bulkSelectedElements,
     setBulkSelectedElements,
+    focusFlash,
   } = useSelect();
+
+  const isFlashing =
+    focusFlash?.type === ObjectType.TABLE && focusFlash.id === tableData.id;
 
   const borderColor = useMemo(
     () => (settings.mode === "light" ? "border-zinc-300" : "border-zinc-600"),
@@ -340,7 +344,9 @@ export default function Table({
                   <Button
                     size="small"
                     type="tertiary"
-                    title={tableData.locked ? t("unlock_table") : t("lock_table")}
+                    title={
+                      tableData.locked ? t("unlock_table") : t("lock_table")
+                    }
                     icon={
                       tableData.locked ? (
                         <IconLock size="small" />
@@ -524,6 +530,18 @@ export default function Table({
           })}
         </div>
       </foreignObject>
+      {isFlashing && (
+        // keyed so that picking the same table again restarts the animation
+        <rect
+          key={focusFlash.key}
+          x={tableData.x - 6}
+          y={tableData.y - 6}
+          width={width + 12}
+          height={height + 12}
+          rx={12}
+          className="table-focus-flash pointer-events-none"
+        />
+      )}
       {!layout.readOnly && !tableData.locked && (
         <ResizeHandles
           x={tableData.x}

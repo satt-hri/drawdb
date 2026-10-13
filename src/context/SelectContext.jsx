@@ -14,6 +14,8 @@ export default function SelectContextProvider({ children }) {
     openFromToolbar: false, // this is to handle triggering onClickOutside when sidebar is disabled
   });
   const [bulkSelectedElements, setBulkSelectedElements] = useState([]);
+  // element briefly highlighted on the canvas after it is picked in the sidebar
+  const [focusFlash, setFocusFlash] = useState(null);
 
   return (
     <SelectContext.Provider
@@ -22,6 +24,8 @@ export default function SelectContextProvider({ children }) {
         setSelectedElement,
         bulkSelectedElements,
         setBulkSelectedElements,
+        focusFlash,
+        setFocusFlash,
       }}
     >
       {children}

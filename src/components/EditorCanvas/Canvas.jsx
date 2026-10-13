@@ -33,6 +33,7 @@ import {
 } from "../../hooks";
 import { useTranslation } from "react-i18next";
 import { useEventListener } from "usehooks-ts";
+import { useHotkeys } from "react-hotkeys-hook";
 import {
   areFieldsCompatible,
   getTableHeight,
@@ -44,10 +45,12 @@ import {
   resolveViewColumns,
 } from "../../utils/views";
 import { getRectFromEndpoints, isInsideRect } from "../../utils/rect";
+import { getAreaContents } from "../../utils/elementBounds";
+import ContextMenu from "./ContextMenu";
 import { State, noteWidth } from "../../data/constants";
 import { nanoid } from "nanoid";
 
-export default function Canvas() {
+export default function Canvas({ editorActions }) {
   const { t } = useTranslation();
 
   const canvasRef = useRef(null);
@@ -77,6 +80,7 @@ export default function Canvas() {
     id: -1,
     type: ObjectType.NONE,
     grabOffset: { x: 0, y: 0 },
+    areaContents: [],
   };
   const [dragging, setDragging] = useState(notDragging);
   const [linking, setLinking] = useState(false);
@@ -93,6 +97,8 @@ export default function Canvas() {
   const { emitAwareness } = useCollab();
   const lastLinkingRef = useRef(false);
   const rightClickPanned = useRef(false);
+  const contextMenuTarget = useRef(null);
+  const [contextMenu, setContextMenu] = useState(null);
 
   useEffect(() => {
     if (linking) {
@@ -126,6 +132,7 @@ export default function Canvas() {
     panStart: { x: 0, y: 0 },
     cursorStart: { x: 0, y: 0 },
   });
+  const [spacePressed, setSpacePressed] = useState(false);
   const [areaResize, setAreaResize] = useState({ id: -1, dir: "none" });
   const [areaInitDimensions, setAreaInitDimensions] = useState({
     x: 0,
@@ -260,7 +267,10 @@ export default function Canvas() {
 
     if (!e.isPrimary) return;
 
-    if (!element.locked || !(e.ctrlKey || e.metaKey)) {
+    // shift+click adds to the selection like in figma, ctrl/cmd+click still works
+    const isAdditive = e.ctrlKey || e.metaKey || e.shiftKey;
+
+    if (!element.locked || !isAdditive) {
       setSelectedElement((prev) => ({
         ...prev,
         element: type,
@@ -270,7 +280,7 @@ export default function Canvas() {
     }
 
     if (element.locked) {
-      if (!(e.ctrlKey || e.metaKey)) {
+      if (!isAdditive) {
         setBulkSelectedElements([]);
       }
       return;
@@ -294,7 +304,7 @@ export default function Canvas() {
       isSameElement(el, elementInBulk),
     );
 
-    if (e.ctrlKey || e.metaKey) {
+    if (isAdditive) {
       if (isSelected) {
         if (bulkSelectedElements.length > 1) {
           setBulkSelectedElements(
@@ -319,6 +329,7 @@ export default function Canvas() {
     if (!isSelected) {
       setBulkSelectedElements([elementInBulk]);
     }
+    const draggedElements = isSelected ? bulkSelectedElements : [elementInBulk];
     setDragging({
       id: element.id,
       type,
@@ -326,7 +337,38 @@ export default function Canvas() {
         x: pointer.spaces.diagram.x - element.x,
         y: pointer.spaces.diagram.y - element.y,
       },
+      // hold alt to move an area without what is inside it
+      areaContents: e.altKey ? [] : getDraggedAreaContents(draggedElements),
     });
+  };
+
+  /**
+   * Elements inside the dragged areas that are not selected themselves,
+   * they are moved along with the areas.
+   */
+  const getDraggedAreaContents = (draggedElements) => {
+    const areaIds = draggedElements
+      .filter((el) => el.type === ObjectType.AREA)
+      .map((el) => el.id);
+    if (areaIds.length === 0) return [];
+
+    return getAreaContents(
+      areaIds,
+      {
+        tables,
+        views,
+        areas,
+        notes,
+        relationships,
+        showComments: settings.showComments,
+      },
+      draggedElements,
+    ).map(({ id, type, x, y }) => ({
+      id,
+      type,
+      currentCoords: { x, y },
+      initialCoords: { x, y },
+    }));
   };
 
   const coordinatesAfterSnappingToGrid = ({ x, y }) => {
@@ -387,31 +429,35 @@ export default function Canvas() {
       const deltaX = mainElementFinalX - currentCoords.x;
       const deltaY = mainElementFinalY - currentCoords.y;
 
-      const newBulkSelectedElements = [];
-      bulkSelectedElements.forEach((el) => {
-        const elementFinalCoords = {
-          x: el.currentCoords.x + deltaX,
-          y: el.currentCoords.y + deltaY,
-        };
-        if (el.type === ObjectType.TABLE) {
-          updateTable(el.id, { ...elementFinalCoords });
-        }
-        if (el.type === ObjectType.AREA) {
-          updateArea(el.id, { ...elementFinalCoords });
-        }
-        if (el.type === ObjectType.NOTE) {
-          updateNote(el.id, { ...elementFinalCoords });
-        }
-        if (el.type === ObjectType.VIEW) {
-          updateView(el.id, { ...elementFinalCoords });
-        }
-        newBulkSelectedElements.push({
-          ...el,
-          currentCoords: elementFinalCoords,
+      const moveBy = (elements) =>
+        elements.map((el) => {
+          const elementFinalCoords = {
+            x: el.currentCoords.x + deltaX,
+            y: el.currentCoords.y + deltaY,
+          };
+          if (el.type === ObjectType.TABLE) {
+            updateTable(el.id, { ...elementFinalCoords });
+          }
+          if (el.type === ObjectType.AREA) {
+            updateArea(el.id, { ...elementFinalCoords });
+          }
+          if (el.type === ObjectType.NOTE) {
+            updateNote(el.id, { ...elementFinalCoords });
+          }
+          if (el.type === ObjectType.VIEW) {
+            updateView(el.id, { ...elementFinalCoords });
+          }
+          return {
+            ...el,
+            currentCoords: elementFinalCoords,
+          };
         });
-      });
 
-      setBulkSelectedElements(newBulkSelectedElements);
+      setBulkSelectedElements(moveBy(bulkSelectedElements));
+      if (dragging.areaContents.length > 0) {
+        const areaContents = moveBy(dragging.areaContents);
+        setDragging((prev) => ({ ...prev, areaContents }));
+      }
       return;
     }
 
@@ -501,7 +547,7 @@ export default function Canvas() {
         x2: pointer.spaces.diagram.x,
         y2: pointer.spaces.diagram.y,
         show: elementPointerDown === null || !elementPointerDown.element.locked,
-        ctrlKey: e.ctrlKey,
+        ctrlKey: e.ctrlKey || e.shiftKey,
         metaKey: e.metaKey,
       });
       if (elementPointerDown !== null) {
@@ -509,7 +555,11 @@ export default function Canvas() {
       }
       pointer.setStyle("crosshair");
     } else if (isMouseMiddleButton || isMouseRightButton) {
-      if (isMouseRightButton) rightClickPanned.current = false;
+      if (isMouseRightButton) {
+        rightClickPanned.current = false;
+        // remembered for the context menu that opens if the pointer doesn't move
+        contextMenuTarget.current = elementPointerDown;
+      }
       setPanning({
         isPanning: true,
         panStart: transform.pan,
@@ -564,12 +614,14 @@ export default function Canvas() {
           action: Action.MOVE,
           bulk: true,
           message: t("bulk_update"),
-          elements: bulkSelectedElements.map((el) => ({
-            id: el.id,
-            type: el.type,
-            undo: el.initialCoords,
-            redo: el.currentCoords,
-          })),
+          elements: [...bulkSelectedElements, ...dragging.areaContents].map(
+            (el) => ({
+              id: el.id,
+              type: el.type,
+              undo: el.initialCoords,
+              redo: el.currentCoords,
+            }),
+          ),
         },
       ]);
       setRedoStack([]);
@@ -599,7 +651,7 @@ export default function Canvas() {
       if (e.button === 2) rightClickPanned.current = true;
     }
     setPanning((old) => ({ ...old, isPanning: false }));
-    pointer.setStyle("default");
+    pointer.setStyle(spacePressed ? "grab" : "default");
 
     if (linking) handleLinking();
     setLinking(false);
@@ -712,42 +764,110 @@ export default function Canvas() {
     addRelationship(newRelationship);
   };
 
+  /**
+   * Shows drawDB's own menu instead of the browser's one, unless the right
+   * button was used to pan or the click was inside a text field.
+   * @param {MouseEvent} e
+   */
+  const handleContextMenu = (e) => {
+    const target = contextMenuTarget.current;
+    contextMenuTarget.current = null;
+
+    if (rightClickPanned.current) {
+      e.preventDefault();
+      rightClickPanned.current = false;
+      return;
+    }
+    if (e.target.closest?.("input, textarea, [contenteditable='true']")) return;
+    if (!editorActions?.current) return;
+
+    e.preventDefault();
+
+    if (target === null) {
+      setContextMenu({ x: e.clientX, y: e.clientY, target: null });
+      return;
+    }
+
+    const { element, type } = target;
+    const isTarget = (el) => el.id === element.id && el.type === type;
+    const inBulk = bulkSelectedElements.some(isTarget);
+
+    // like in figma, right-clicking outside the selection selects the element
+    setSelectedElement((prev) => ({
+      ...prev,
+      element: type,
+      id: element.id,
+      open: false,
+    }));
+    if (!inBulk) {
+      setBulkSelectedElements(
+        element.locked
+          ? []
+          : [
+              {
+                id: element.id,
+                type,
+                currentCoords: { x: element.x, y: element.y },
+                initialCoords: { x: element.x, y: element.y },
+              },
+            ],
+      );
+    }
+
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      target: { id: element.id, type, locked: element.locked },
+      selectionSize: inBulk ? bulkSelectedElements.length : 1,
+    });
+  };
+
   useEventListener(
     "wheel",
     (e) => {
       e.preventDefault();
+      setContextMenu(null);
+
+      // firefox may report the delta in lines or pages instead of pixels
+      const deltaScale =
+        e.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 16
+          : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? 800
+            : 1;
+      const deltaX = e.deltaX * deltaScale;
+      const deltaY = e.deltaY * deltaScale;
 
       if (e.ctrlKey || e.metaKey) {
-        const eagernessFactor = 0.05;
+        // mouse wheels send large integer steps and keep the fixed 5% zoom,
+        // trackpad pinches send many small deltas and zoom proportionally
+        const isMouseWheel =
+          e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
+          (Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 50);
+        const factor = isMouseWheel
+          ? deltaY <= 0
+            ? 1.05
+            : 1 / 1.05
+          : Math.exp(-Math.max(-50, Math.min(50, deltaY)) * 0.01);
+        // keep the point under the cursor fixed while zooming
+        const anchor = pointer.spaces.diagram;
         setTransform((prev) => ({
           pan: {
-            x:
-              prev.pan.x -
-              (pointer.spaces.diagram.x - prev.pan.x) *
-                eagernessFactor *
-                Math.sign(e.deltaY),
-            y:
-              prev.pan.y -
-              (pointer.spaces.diagram.y - prev.pan.y) *
-                eagernessFactor *
-                Math.sign(e.deltaY),
+            x: anchor.x - (anchor.x - prev.pan.x) / factor,
+            y: anchor.y - (anchor.y - prev.pan.y) / factor,
           },
-          zoom: e.deltaY <= 0 ? prev.zoom * 1.05 : prev.zoom / 1.05,
-        }));
-      } else if (e.shiftKey) {
-        setTransform((prev) => ({
-          ...prev,
-          pan: {
-            ...prev.pan,
-            x: prev.pan.x + e.deltaY / prev.zoom,
-          },
+          zoom: prev.zoom * factor,
         }));
       } else {
+        // trackpads scroll in both directions, shift+wheel scrolls sideways
+        const swap = e.shiftKey && deltaX === 0;
+        const dx = swap ? deltaY : deltaX;
+        const dy = swap ? 0 : deltaY;
         setTransform((prev) => ({
           ...prev,
           pan: {
-            ...prev.pan,
-            y: prev.pan.y + e.deltaY / prev.zoom,
+            x: prev.pan.x + dx / prev.zoom,
+            y: prev.pan.y + dy / prev.zoom,
           },
         }));
       }
@@ -755,6 +875,46 @@ export default function Canvas() {
     canvasRef,
     { passive: false },
   );
+
+  // hold space to pan with the left mouse button, like in figma.
+  // react-hotkeys-hook ignores events from inputs and textareas by default
+  useHotkeys(
+    "space",
+    (e) => {
+      const pressed = e.type === "keydown";
+      setSpacePressed(pressed);
+      if (!panning.isPanning) pointer.setStyle(pressed ? "grab" : "default");
+    },
+    {
+      keydown: true,
+      keyup: true,
+      preventDefault: true,
+      ignoreEventWhen: (e) => Boolean(e.target?.closest?.(".monaco-editor")),
+    },
+  );
+
+  // keyup is never received if the window loses focus while space is held
+  useEventListener("blur", () => {
+    setSpacePressed(false);
+    if (!panning.isPanning) pointer.setStyle("default");
+  });
+
+  /**
+   * Runs in the capture phase so that tables, notes, areas and their
+   * handles don't start dragging, resizing or linking while space is held.
+   * @param {PointerEvent} e
+   */
+  const handlePointerDownCapture = (e) => {
+    if (!spacePressed || !e.isPrimary || e.button !== 0) return;
+    if (selectedElement.open && !layout.sidebar) return;
+    e.stopPropagation();
+    setPanning({
+      isPanning: true,
+      panStart: transform.pan,
+      cursorStart: pointer.spaces.screen,
+    });
+    pointer.setStyle("grabbing");
+  };
 
   return (
     <div className="grow h-full touch-none" id="canvas">
@@ -769,14 +929,10 @@ export default function Canvas() {
           id="diagram"
           ref={canvasRef}
           onPointerMove={handlePointerMove}
+          onPointerDownCapture={handlePointerDownCapture}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
-          onContextMenu={(e) => {
-            if (rightClickPanned.current) {
-              e.preventDefault();
-              rightClickPanned.current = false;
-            }
-          }}
+          onContextMenu={handleContextMenu}
           className="absolute w-full h-full touch-none"
           viewBox={`${viewBox.left} ${viewBox.top} ${viewBox.width} ${viewBox.height}`}
         >
@@ -886,6 +1042,11 @@ export default function Canvas() {
           )}
         </svg>
       </div>
+      <ContextMenu
+        menu={contextMenu}
+        actions={editorActions}
+        onClose={() => setContextMenu(null)}
+      />
       {settings.showDebugCoordinates && (
         <div className="fixed flex flex-col flex-wrap gap-6 bg-[rgba(var(--semi-grey-1),var(--tw-bg-opacity))]/40 border border-color bottom-4 right-4 p-4 rounded-xl backdrop-blur-xs pointer-events-none select-none">
           <table className="table-auto grow">
