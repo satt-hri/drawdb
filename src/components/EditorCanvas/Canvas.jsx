@@ -850,14 +850,11 @@ export default function Canvas({ editorActions }) {
             : 1 / 1.05
           : Math.exp(-Math.max(-50, Math.min(50, deltaY)) * 0.01);
         // keep the point under the cursor fixed while zooming
+        const anchor = pointer.spaces.diagram;
         setTransform((prev) => ({
           pan: {
-            x:
-              pointer.spaces.diagram.x -
-              (pointer.spaces.diagram.x - prev.pan.x) / factor,
-            y:
-              pointer.spaces.diagram.y -
-              (pointer.spaces.diagram.y - prev.pan.y) / factor,
+            x: anchor.x - (anchor.x - prev.pan.x) / factor,
+            y: anchor.y - (anchor.y - prev.pan.y) / factor,
           },
           zoom: prev.zoom * factor,
         }));
