@@ -357,6 +357,10 @@ const en = {
       "Duplicate output column '{{columnName}}' in view '{{viewName}}'",
     lock: "Lock",
     unlock: "Unlock",
+    select_all: "Select all",
+    zoom_to_fit: "Zoom to fit",
+    zoom_to_selection: "Zoom to selection",
+    zoom_to_100: "Zoom to 100%",
     edit_dbml: "Edit DBML",
     dbml_problem: "Ln {{line}}, Col {{column}}: {{message}}",
     move_to_cloud_prompt:

@@ -2,7 +2,7 @@ import { Toast } from "@douyinfe/semi-ui";
 import { createContext, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Action, ObjectType, defaultBlue } from "../data/constants";
-import { useSelect, useTransform, useUndoRedo, useCollab } from "../hooks";
+import { useSelect, useTransformRef, useUndoRedo, useCollab } from "../hooks";
 import { cascadePosition } from "../utils/rect";
 
 export const AreasContext = createContext(null);
@@ -10,7 +10,8 @@ export const AreasContext = createContext(null);
 export default function AreasContextProvider({ children }) {
   const { t } = useTranslation();
   const [areas, setAreas] = useState([]);
-  const { transform } = useTransform();
+  // only read when a new element is placed, see useTransformRef
+  const transformRef = useTransformRef();
   const { selectedElement, setSelectedElement } = useSelect();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { emitDelta, isApplyingRemoteRef } = useCollab();
@@ -31,7 +32,10 @@ export default function AreasContextProvider({ children }) {
         id: areas.length,
         name: `area_${areas.length}`,
         ...cascadePosition(
-          { x: transform.pan.x - width / 2, y: transform.pan.y - height / 2 },
+          {
+            x: transformRef.current.pan.x - width / 2,
+            y: transformRef.current.pan.y - height / 2,
+          },
           areas,
         ),
         width,

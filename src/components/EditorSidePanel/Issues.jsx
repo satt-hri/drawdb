@@ -11,6 +11,8 @@ import {
 } from "../../hooks";
 import { useTranslation } from "react-i18next";
 
+const issuesCheckDelay = 300;
+
 export default function Issues({ dbmlProblems = [] }) {
   const { types } = useTypes();
   const { t } = useTranslation();
@@ -20,8 +22,10 @@ export default function Issues({ dbmlProblems = [] }) {
   const { tables, relationships, database } = useDiagram();
   const [issues, setIssues] = useState([]);
 
+  // Checking the whole diagram is expensive, and the tables change on every
+  // frame while dragging or on every key typed, so wait until edits pause.
   useEffect(() => {
-    const findIssues = async () => {
+    const timeout = setTimeout(() => {
       const newIssues = getIssues({
         tables: tables,
         relationships: relationships,
@@ -31,13 +35,11 @@ export default function Issues({ dbmlProblems = [] }) {
         views: views,
       });
 
-      if (!arrayIsEqual(newIssues, issues)) {
-        setIssues(newIssues);
-      }
-    };
+      setIssues((prev) => (arrayIsEqual(newIssues, prev) ? prev : newIssues));
+    }, issuesCheckDelay);
 
-    findIssues();
-  }, [tables, relationships, issues, types, database, enums, views]);
+    return () => clearTimeout(timeout);
+  }, [tables, relationships, types, database, enums, views]);
 
   const badgeCount = settings.strictMode
     ? dbmlProblems.length || null
