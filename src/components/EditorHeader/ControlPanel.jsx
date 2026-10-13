@@ -124,6 +124,7 @@ export default function ControlPanel({
   lastSaved,
   setLastSaved,
   toolbarContainer,
+  editorActions,
 }) {
   const { id: diagramId } = useParams();
 
@@ -738,6 +739,27 @@ export default function ControlPanel({
     setBulkSelectedElements([]);
   };
 
+  const updateElement = ({ id, type }, values) => {
+    const updaters = {
+      [ObjectType.TABLE]: updateTable,
+      [ObjectType.VIEW]: updateView,
+      [ObjectType.AREA]: updateArea,
+      [ObjectType.NOTE]: updateNote,
+    };
+    updaters[type]?.(id, values);
+  };
+
+  const toggleLock = (target) => {
+    if (layout.readOnly) return;
+    const element = findElement(target);
+    if (!element) return;
+
+    const locked = !element.locked;
+    updateElement(target, { locked });
+    // locked elements can't stay selected, same as the lock button on the element
+    if (locked) deselect();
+  };
+
   // move the selected elements like in figma, or pan the canvas if nothing is selected
   const nudgeOrPan = (dx, dy, step) => {
     const selection = layout.readOnly
@@ -759,13 +781,7 @@ export default function ControlPanel({
       };
     });
 
-    const updaters = {
-      [ObjectType.TABLE]: updateTable,
-      [ObjectType.VIEW]: updateView,
-      [ObjectType.AREA]: updateArea,
-      [ObjectType.NOTE]: updateNote,
-    };
-    elements.forEach((el) => updaters[el.type](el.id, el.redo));
+    elements.forEach((el) => updateElement(el, el.redo));
     setUndoStack((prev) => [
       ...prev,
       {
@@ -2137,6 +2153,26 @@ export default function ControlPanel({
       },
     },
   };
+
+  // shared with the canvas context menu so that it runs the same code as the menus and shortcuts
+  useEffect(() => {
+    if (!editorActions) return;
+    editorActions.current = {
+      readOnly: layout.readOnly,
+      edit,
+      copy,
+      cut,
+      paste,
+      duplicate,
+      deleteSelection,
+      toggleLock,
+      selectAll,
+      zoomToSelection,
+      fitWindow,
+      resetZoom,
+      resetView,
+    };
+  });
 
   useHotkeys("mod+i", fileImport, EDITOR_HOTKEY);
   useHotkeys("mod+z", undo, EDITOR_HOTKEY);

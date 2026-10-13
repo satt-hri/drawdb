@@ -45,10 +45,11 @@ import {
   resolveViewColumns,
 } from "../../utils/views";
 import { getRectFromEndpoints, isInsideRect } from "../../utils/rect";
+import ContextMenu from "./ContextMenu";
 import { State, noteWidth } from "../../data/constants";
 import { nanoid } from "nanoid";
 
-export default function Canvas() {
+export default function Canvas({ editorActions }) {
   const { t } = useTranslation();
 
   const canvasRef = useRef(null);
@@ -94,6 +95,8 @@ export default function Canvas() {
   const { emitAwareness } = useCollab();
   const lastLinkingRef = useRef(false);
   const rightClickPanned = useRef(false);
+  const contextMenuTarget = useRef(null);
+  const [contextMenu, setContextMenu] = useState(null);
 
   useEffect(() => {
     if (linking) {
@@ -514,7 +517,11 @@ export default function Canvas() {
       }
       pointer.setStyle("crosshair");
     } else if (isMouseMiddleButton || isMouseRightButton) {
-      if (isMouseRightButton) rightClickPanned.current = false;
+      if (isMouseRightButton) {
+        rightClickPanned.current = false;
+        // remembered for the context menu that opens if the pointer doesn't move
+        contextMenuTarget.current = elementPointerDown;
+      }
       setPanning({
         isPanning: true,
         panStart: transform.pan,
@@ -717,10 +724,69 @@ export default function Canvas() {
     addRelationship(newRelationship);
   };
 
+  /**
+   * Shows drawDB's own menu instead of the browser's one, unless the right
+   * button was used to pan or the click was inside a text field.
+   * @param {MouseEvent} e
+   */
+  const handleContextMenu = (e) => {
+    const target = contextMenuTarget.current;
+    contextMenuTarget.current = null;
+
+    if (rightClickPanned.current) {
+      e.preventDefault();
+      rightClickPanned.current = false;
+      return;
+    }
+    if (e.target.closest?.("input, textarea, [contenteditable='true']")) return;
+    if (!editorActions?.current) return;
+
+    e.preventDefault();
+
+    if (target === null) {
+      setContextMenu({ x: e.clientX, y: e.clientY, target: null });
+      return;
+    }
+
+    const { element, type } = target;
+    const isTarget = (el) => el.id === element.id && el.type === type;
+    const inBulk = bulkSelectedElements.some(isTarget);
+
+    // like in figma, right-clicking outside the selection selects the element
+    setSelectedElement((prev) => ({
+      ...prev,
+      element: type,
+      id: element.id,
+      open: false,
+    }));
+    if (!inBulk) {
+      setBulkSelectedElements(
+        element.locked
+          ? []
+          : [
+              {
+                id: element.id,
+                type,
+                currentCoords: { x: element.x, y: element.y },
+                initialCoords: { x: element.x, y: element.y },
+              },
+            ],
+      );
+    }
+
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      target: { id: element.id, type, locked: element.locked },
+      selectionSize: inBulk ? bulkSelectedElements.length : 1,
+    });
+  };
+
   useEventListener(
     "wheel",
     (e) => {
       e.preventDefault();
+      setContextMenu(null);
 
       // firefox may report the delta in lines or pages instead of pixels
       const deltaScale =
@@ -829,12 +895,7 @@ export default function Canvas() {
           onPointerDownCapture={handlePointerDownCapture}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
-          onContextMenu={(e) => {
-            if (rightClickPanned.current) {
-              e.preventDefault();
-              rightClickPanned.current = false;
-            }
-          }}
+          onContextMenu={handleContextMenu}
           className="absolute w-full h-full touch-none"
           viewBox={`${viewBox.left} ${viewBox.top} ${viewBox.width} ${viewBox.height}`}
         >
@@ -944,6 +1005,11 @@ export default function Canvas() {
           )}
         </svg>
       </div>
+      <ContextMenu
+        menu={contextMenu}
+        actions={editorActions}
+        onClose={() => setContextMenu(null)}
+      />
       {settings.showDebugCoordinates && (
         <div className="fixed flex flex-col flex-wrap gap-6 bg-[rgba(var(--semi-grey-1),var(--tw-bg-opacity))]/40 border border-color bottom-4 right-4 p-4 rounded-xl backdrop-blur-xs pointer-events-none select-none">
           <table className="table-auto grow">
