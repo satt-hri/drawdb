@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useState } from "react";
+import { memo, useContext, useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { Slot, useExtensions } from "../../context/ExtensionsContext";
 import { createPortal } from "react-dom";
@@ -63,6 +63,8 @@ import {
   useLayout,
   useSettings,
   useTransform,
+  useTransformRef,
+  useSetTransform,
   useDiagram,
   useUndoRedo,
   useSelect,
@@ -119,7 +121,13 @@ const EDITOR_HOTKEY = {
   ignoreEventWhen: (e) => Boolean(e.target?.closest?.(".monaco-editor")),
 };
 
-export default function ControlPanel({
+// the only part of the header that changes with the transform
+function ZoomPercentage() {
+  const { transform } = useTransform();
+  return <>{Math.floor(transform.zoom * 100)}%</>;
+}
+
+function ControlPanel({
   title,
   setTitle,
   lastSaved,
@@ -178,7 +186,9 @@ export default function ControlPanel({
     bulkSelectedElements,
     setBulkSelectedElements,
   } = useSelect();
-  const { transform, setTransform } = useTransform();
+  // not useTransform: that would re-render the whole header on every pan frame
+  const setTransform = useSetTransform();
+  const transformRef = useTransformRef();
   const { t, i18n } = useTranslation();
   const { version, gistId, setGistId } = useContext(IdContext);
   const isTemplate = useMatch("/editor/templates/:id");
@@ -1253,8 +1263,8 @@ export default function ControlPanel({
         notes,
         areas,
         views,
-        pan: transform.pan,
-        zoom: transform.zoom,
+        pan: transformRef.current.pan,
+        zoom: transformRef.current.zoom,
         ...(databases[database].hasEnums && { enums }),
         ...(databases[database].hasTypes && { types }),
       };
@@ -1313,8 +1323,8 @@ export default function ControlPanel({
       notes,
       areas,
       views,
-      pan: transform.pan,
-      zoom: transform.zoom,
+      pan: transformRef.current.pan,
+      zoom: transformRef.current.zoom,
       ...(databases[database].hasEnums && { enums }),
       ...(databases[database].hasTypes && { types }),
     };
@@ -2369,7 +2379,7 @@ export default function ControlPanel({
           >
             <div className="py-1 px-2 hover-2 rounded-sm flex items-center justify-center">
               <div className="w-[40px]">
-                {Math.floor(transform.zoom * 100)}%
+                <ZoomPercentage />
               </div>
               <div>
                 <IconCaretdown />
@@ -2724,3 +2734,6 @@ export default function ControlPanel({
     );
   }
 }
+
+// memoized so that re-renders of the workspace (e.g. while panning) skip it
+export default memo(ControlPanel);

@@ -519,9 +519,15 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     load();
   }, [load]);
 
+  // memoized: a new object on every render re-rendered the header while panning
+  const idContextValue = useMemo(
+    () => ({ gistId, setGistId, version, setVersion }),
+    [gistId, version],
+  );
+
   return (
     <div className="h-full flex flex-col overflow-hidden theme">
-      <IdContext.Provider value={{ gistId, setGistId, version, setVersion }}>
+      <IdContext.Provider value={idContextValue}>
         <ControlPanel
           title={title}
           setTitle={setTitle}

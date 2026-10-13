@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Tabs, TabPane } from "@douyinfe/semi-ui";
 import { IconCode, IconList } from "@douyinfe/semi-icons";
 import { IconTable, IconRelationship } from "../../icons";
@@ -28,7 +28,7 @@ import { isRtl } from "../../i18n/utils/rtl";
 import i18n from "../../i18n/i18n";
 import DBMLEditor from "./DBMLEditor";
 
-export default function SidePanel({ width, resize, setResize }) {
+function SidePanel({ width, resize, setResize }) {
   const { layout, setLayout } = useLayout();
   const { settings } = useSettings();
   const { selectedElement, setSelectedElement } = useSelect();
@@ -195,3 +195,6 @@ export default function SidePanel({ width, resize, setResize }) {
     </div>
   );
 }
+
+// memoized so that re-renders of the workspace (e.g. while panning) skip it
+export default memo(SidePanel);

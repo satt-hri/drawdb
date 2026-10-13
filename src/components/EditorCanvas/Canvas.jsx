@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Slot } from "../../context/ExtensionsContext";
 import {
   Action,
@@ -150,8 +150,13 @@ export default function Canvas({ editorActions }) {
     metaKey: false,
   });
   // this is used to store the element that is clicked on
-  // at the moment, and shouldn't be a part of the state
-  let elementPointerDown = null;
+  // at the moment, and shouldn't be a part of the state.
+  // Elements set it on pointerdown, before the event reaches the svg.
+  const elementPointerDown = useRef(null);
+  // stable so that memoized tables aren't re-rendered by a new callback
+  const onTablePointerDown = useCallback((table) => {
+    elementPointerDown.current = { element: table, type: ObjectType.TABLE };
+  }, []);
 
   const isSameElement = (el1, el2) => {
     return el1.id === el2.id && el1.type === el2.type;
@@ -525,6 +530,10 @@ export default function Canvas({ editorActions }) {
    * @param {PointerEvent} e
    */
   const handlePointerDown = (e) => {
+    // read and clear it right away so that it never leaks into a later event
+    const target = elementPointerDown.current;
+    elementPointerDown.current = null;
+
     if (!e.isPrimary) return;
 
     // don't pan if the sidesheet for editing a table is open
@@ -546,19 +555,19 @@ export default function Canvas({ editorActions }) {
         y1: pointer.spaces.diagram.y,
         x2: pointer.spaces.diagram.x,
         y2: pointer.spaces.diagram.y,
-        show: elementPointerDown === null || !elementPointerDown.element.locked,
+        show: target === null || !target.element.locked,
         ctrlKey: e.ctrlKey || e.shiftKey,
         metaKey: e.metaKey,
       });
-      if (elementPointerDown !== null) {
-        handlePointerDownOnElement(e, elementPointerDown);
+      if (target !== null) {
+        handlePointerDownOnElement(e, target);
       }
       pointer.setStyle("crosshair");
     } else if (isMouseMiddleButton || isMouseRightButton) {
       if (isMouseRightButton) {
         rightClickPanned.current = false;
         // remembered for the context menu that opens if the pointer doesn't move
-        contextMenuTarget.current = elementPointerDown;
+        contextMenuTarget.current = target;
       }
       setPanning({
         isPanning: true,
@@ -688,11 +697,17 @@ export default function Canvas({ editorActions }) {
     });
   };
 
-  const handleGripField = () => {
+  // only uses state setters, so it can be stable for the memoized tables
+  const handleGripField = useCallback(() => {
     setPanning((old) => ({ ...old, isPanning: false }));
-    setDragging(notDragging);
+    setDragging({
+      id: -1,
+      type: ObjectType.NONE,
+      grabOffset: { x: 0, y: 0 },
+      areaContents: [],
+    });
     setLinking(true);
-  };
+  }, []);
 
   const getCardinality = (startField, endField) => {
     const startIsUnique = startField.unique || startField.primary;
@@ -973,7 +988,7 @@ export default function Canvas({ editorActions }) {
               setResize={setAreaResize}
               setInitDimensions={setAreaInitDimensions}
               onPointerDown={() => {
-                elementPointerDown = {
+                elementPointerDown.current = {
                   element: a,
                   type: ObjectType.AREA,
                 };
@@ -987,15 +1002,11 @@ export default function Canvas({ editorActions }) {
             <Table
               key={table.id}
               tableData={table}
+              zoom={transform.zoom}
               setHoveredTable={setHoveredTable}
               handleGripField={handleGripField}
               setLinkingLine={setLinkingLine}
-              onPointerDown={() => {
-                elementPointerDown = {
-                  element: table,
-                  type: ObjectType.TABLE,
-                };
-              }}
+              onPointerDown={onTablePointerDown}
             />
           ))}
           {views.map((view) => (
@@ -1003,7 +1014,7 @@ export default function Canvas({ editorActions }) {
               key={view.id}
               viewData={view}
               onPointerDown={() => {
-                elementPointerDown = {
+                elementPointerDown.current = {
                   element: view,
                   type: ObjectType.VIEW,
                 };
@@ -1024,7 +1035,7 @@ export default function Canvas({ editorActions }) {
               key={n.id}
               data={n}
               onPointerDown={() => {
-                elementPointerDown = {
+                elementPointerDown.current = {
                   element: n,
                   type: ObjectType.NOTE,
                 };

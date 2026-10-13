@@ -4,7 +4,8 @@ import { getTableHeight, getTableWidth } from "../utils/utils";
 import useDiagram from "./useDiagram";
 import useSelect from "./useSelect";
 import useSettings from "./useSettings";
-import useTransform from "./useTransform";
+import useSetTransform from "./useSetTransform";
+import useTransformRef from "./useTransformRef";
 
 const panDuration = 300;
 const flashDuration = 2000;
@@ -16,7 +17,8 @@ const flashDuration = 2000;
 export default function useFocusTable() {
   const { tables, relationships } = useDiagram();
   const { settings } = useSettings();
-  const { transform, setTransform } = useTransform();
+  const setTransform = useSetTransform();
+  const transformRef = useTransformRef();
   const { setFocusFlash } = useSelect();
   const frame = useRef(null);
   const flashTimeout = useRef(null);
@@ -33,7 +35,7 @@ export default function useFocusTable() {
     const table = tables.find((t) => t.id === tableId);
     if (!table) return;
 
-    const start = transform.pan;
+    const start = transformRef.current.pan;
     const target = {
       x: table.x + getTableWidth(table) / 2,
       y:
