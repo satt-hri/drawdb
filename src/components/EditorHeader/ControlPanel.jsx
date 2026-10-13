@@ -105,6 +105,7 @@ import {
   getViewWidth,
   resolveViewColumns,
 } from "../../utils/views";
+import { getAreaContents } from "../../utils/elementBounds";
 import { autoArrange } from "../../utils/autoArrange";
 import { findAutoFKRelationships } from "../../utils/autoRelationships";
 import { deleteFromCache, STORAGE_KEY } from "../../utils/cache";
@@ -771,7 +772,21 @@ export default function ControlPanel({
       return;
     }
 
-    const elements = selection.map((el) => {
+    // selected areas carry what is inside them, like dragging them does
+    const areaContents = getAreaContents(
+      selection.filter((el) => el.type === ObjectType.AREA).map((el) => el.id),
+      {
+        tables,
+        views,
+        areas,
+        notes,
+        relationships,
+        showComments: settings.showComments,
+      },
+      selection,
+    );
+
+    const elements = [...selection, ...areaContents].map((el) => {
       const { x, y } = findElement(el);
       return {
         id: el.id,

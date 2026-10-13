@@ -45,6 +45,7 @@ import {
   resolveViewColumns,
 } from "../../utils/views";
 import { getRectFromEndpoints, isInsideRect } from "../../utils/rect";
+import { getAreaContents } from "../../utils/elementBounds";
 import ContextMenu from "./ContextMenu";
 import { State, noteWidth } from "../../data/constants";
 import { nanoid } from "nanoid";
@@ -79,6 +80,7 @@ export default function Canvas({ editorActions }) {
     id: -1,
     type: ObjectType.NONE,
     grabOffset: { x: 0, y: 0 },
+    areaContents: [],
   };
   const [dragging, setDragging] = useState(notDragging);
   const [linking, setLinking] = useState(false);
@@ -327,6 +329,7 @@ export default function Canvas({ editorActions }) {
     if (!isSelected) {
       setBulkSelectedElements([elementInBulk]);
     }
+    const draggedElements = isSelected ? bulkSelectedElements : [elementInBulk];
     setDragging({
       id: element.id,
       type,
@@ -334,7 +337,38 @@ export default function Canvas({ editorActions }) {
         x: pointer.spaces.diagram.x - element.x,
         y: pointer.spaces.diagram.y - element.y,
       },
+      // hold alt to move an area without what is inside it
+      areaContents: e.altKey ? [] : getDraggedAreaContents(draggedElements),
     });
+  };
+
+  /**
+   * Elements inside the dragged areas that are not selected themselves,
+   * they are moved along with the areas.
+   */
+  const getDraggedAreaContents = (draggedElements) => {
+    const areaIds = draggedElements
+      .filter((el) => el.type === ObjectType.AREA)
+      .map((el) => el.id);
+    if (areaIds.length === 0) return [];
+
+    return getAreaContents(
+      areaIds,
+      {
+        tables,
+        views,
+        areas,
+        notes,
+        relationships,
+        showComments: settings.showComments,
+      },
+      draggedElements,
+    ).map(({ id, type, x, y }) => ({
+      id,
+      type,
+      currentCoords: { x, y },
+      initialCoords: { x, y },
+    }));
   };
 
   const coordinatesAfterSnappingToGrid = ({ x, y }) => {
@@ -395,31 +429,35 @@ export default function Canvas({ editorActions }) {
       const deltaX = mainElementFinalX - currentCoords.x;
       const deltaY = mainElementFinalY - currentCoords.y;
 
-      const newBulkSelectedElements = [];
-      bulkSelectedElements.forEach((el) => {
-        const elementFinalCoords = {
-          x: el.currentCoords.x + deltaX,
-          y: el.currentCoords.y + deltaY,
-        };
-        if (el.type === ObjectType.TABLE) {
-          updateTable(el.id, { ...elementFinalCoords });
-        }
-        if (el.type === ObjectType.AREA) {
-          updateArea(el.id, { ...elementFinalCoords });
-        }
-        if (el.type === ObjectType.NOTE) {
-          updateNote(el.id, { ...elementFinalCoords });
-        }
-        if (el.type === ObjectType.VIEW) {
-          updateView(el.id, { ...elementFinalCoords });
-        }
-        newBulkSelectedElements.push({
-          ...el,
-          currentCoords: elementFinalCoords,
+      const moveBy = (elements) =>
+        elements.map((el) => {
+          const elementFinalCoords = {
+            x: el.currentCoords.x + deltaX,
+            y: el.currentCoords.y + deltaY,
+          };
+          if (el.type === ObjectType.TABLE) {
+            updateTable(el.id, { ...elementFinalCoords });
+          }
+          if (el.type === ObjectType.AREA) {
+            updateArea(el.id, { ...elementFinalCoords });
+          }
+          if (el.type === ObjectType.NOTE) {
+            updateNote(el.id, { ...elementFinalCoords });
+          }
+          if (el.type === ObjectType.VIEW) {
+            updateView(el.id, { ...elementFinalCoords });
+          }
+          return {
+            ...el,
+            currentCoords: elementFinalCoords,
+          };
         });
-      });
 
-      setBulkSelectedElements(newBulkSelectedElements);
+      setBulkSelectedElements(moveBy(bulkSelectedElements));
+      if (dragging.areaContents.length > 0) {
+        const areaContents = moveBy(dragging.areaContents);
+        setDragging((prev) => ({ ...prev, areaContents }));
+      }
       return;
     }
 
@@ -576,12 +614,14 @@ export default function Canvas({ editorActions }) {
           action: Action.MOVE,
           bulk: true,
           message: t("bulk_update"),
-          elements: bulkSelectedElements.map((el) => ({
-            id: el.id,
-            type: el.type,
-            undo: el.initialCoords,
-            redo: el.currentCoords,
-          })),
+          elements: [...bulkSelectedElements, ...dragging.areaContents].map(
+            (el) => ({
+              id: el.id,
+              type: el.type,
+              undo: el.initialCoords,
+              redo: el.currentCoords,
+            }),
+          ),
         },
       ]);
       setRedoStack([]);
