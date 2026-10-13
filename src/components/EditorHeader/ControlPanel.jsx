@@ -170,7 +170,12 @@ export default function ControlPanel({
   const { notes, setNotes, updateNote, addNote, deleteNote } = useNotes();
   const { areas, setAreas, updateArea, addArea, deleteArea } = useAreas();
   const { undoStack, redoStack, setUndoStack, setRedoStack } = useUndoRedo();
-  const { selectedElement, setSelectedElement } = useSelect();
+  const {
+    selectedElement,
+    setSelectedElement,
+    bulkSelectedElements,
+    setBulkSelectedElements,
+  } = useSelect();
   const { transform, setTransform } = useTransform();
   const { t, i18n } = useTranslation();
   const { version, gistId, setGistId } = useContext(IdContext);
@@ -262,7 +267,13 @@ export default function ControlPanel({
       }
     } else if (a.action === Action.DELETE) {
       if (a.element === ObjectType.TABLE) {
-        a.data.relationship.forEach((x) => addRelationship(x, false));
+        // when connected tables are deleted together, each undo entry holds
+        // the shared relationships, so skip the ones already restored
+        a.data.relationship.forEach((x) => {
+          if (!relationships.some((r) => r.id === x.id)) {
+            addRelationship(x, false);
+          }
+        });
         addTable(a.data, false);
       } else if (a.element === ObjectType.RELATIONSHIP) {
         addRelationship(a.data, false);
@@ -648,10 +659,137 @@ export default function ControlPanel({
         y: prev.pan.y + dy / prev.zoom,
       },
     }));
-  const panLeft = () => panBy(-keyboardPanStep, 0);
-  const panRight = () => panBy(keyboardPanStep, 0);
-  const panUp = () => panBy(0, -keyboardPanStep);
-  const panDown = () => panBy(0, keyboardPanStep);
+  const resetZoom = () => setTransform((prev) => ({ ...prev, zoom: 1 }));
+
+  const findElement = ({ id, type }) => {
+    switch (type) {
+      case ObjectType.TABLE:
+        return tables.find((t) => t.id === id);
+      case ObjectType.VIEW:
+        return views.find((v) => v.id === id);
+      case ObjectType.AREA:
+        return areas.find((a) => a.id === id);
+      case ObjectType.NOTE:
+        return notes.find((n) => n.id === id);
+      default:
+        return undefined;
+    }
+  };
+
+  // what is highlighted on the canvas: the selected element plus the bulk selection
+  const getSelection = () => {
+    const selection = bulkSelectedElements.map(({ id, type }) => ({
+      id,
+      type,
+    }));
+    const isSelectedInBulk = selection.some(
+      (el) =>
+        el.id === selectedElement.id && el.type === selectedElement.element,
+    );
+    if (selectedElement.element !== ObjectType.NONE && !isSelectedInBulk) {
+      selection.push({ id: selectedElement.id, type: selectedElement.element });
+    }
+    return selection.filter((el) => findElement(el) !== undefined);
+  };
+
+  const selectAll = () => {
+    const toBulkElement = (type) => (element) => ({
+      id: element.id,
+      type,
+      currentCoords: { x: element.x, y: element.y },
+      initialCoords: { x: element.x, y: element.y },
+    });
+    const unlocked = (element) => !element.locked;
+    setBulkSelectedElements([
+      ...tables.filter(unlocked).map(toBulkElement(ObjectType.TABLE)),
+      ...views.filter(unlocked).map(toBulkElement(ObjectType.VIEW)),
+      ...areas.filter(unlocked).map(toBulkElement(ObjectType.AREA)),
+      ...notes.filter(unlocked).map(toBulkElement(ObjectType.NOTE)),
+    ]);
+  };
+
+  const deselect = () => {
+    setBulkSelectedElements([]);
+    setSelectedElement((prev) => ({
+      ...prev,
+      element: ObjectType.NONE,
+      id: -1,
+      open: false,
+    }));
+  };
+
+  const deleteSelection = () => {
+    if (layout.readOnly) return;
+    const selection = getSelection();
+    if (selection.length === 0) return;
+
+    // notes and areas use their index as id and get re-indexed on delete,
+    // so delete them from the highest id down
+    const byIdDesc = (a, b) => b.id - a.id;
+    const ofType = (type) => selection.filter((el) => el.type === type);
+    ofType(ObjectType.TABLE).forEach((el) => deleteTable(el.id));
+    ofType(ObjectType.VIEW).forEach((el) => deleteView(el.id));
+    ofType(ObjectType.AREA)
+      .sort(byIdDesc)
+      .forEach((el) => deleteArea(el.id));
+    ofType(ObjectType.NOTE)
+      .sort(byIdDesc)
+      .forEach((el) => deleteNote(el.id));
+    setBulkSelectedElements([]);
+  };
+
+  // move the selected elements like in figma, or pan the canvas if nothing is selected
+  const nudgeOrPan = (dx, dy, step) => {
+    const selection = layout.readOnly
+      ? []
+      : getSelection().filter((el) => !findElement(el).locked);
+
+    if (selection.length === 0) {
+      panBy(dx * keyboardPanStep, dy * keyboardPanStep);
+      return;
+    }
+
+    const elements = selection.map((el) => {
+      const { x, y } = findElement(el);
+      return {
+        id: el.id,
+        type: el.type,
+        undo: { x, y },
+        redo: { x: x + dx * step, y: y + dy * step },
+      };
+    });
+
+    const updaters = {
+      [ObjectType.TABLE]: updateTable,
+      [ObjectType.VIEW]: updateView,
+      [ObjectType.AREA]: updateArea,
+      [ObjectType.NOTE]: updateNote,
+    };
+    elements.forEach((el) => updaters[el.type](el.id, el.redo));
+    setUndoStack((prev) => [
+      ...prev,
+      {
+        action: Action.MOVE,
+        bulk: true,
+        message: t("bulk_update"),
+        elements,
+      },
+    ]);
+    setRedoStack([]);
+    setBulkSelectedElements((prev) =>
+      prev.map((el) => {
+        const moved = elements.find(
+          (m) => m.id === el.id && m.type === el.type,
+        );
+        if (!moved) return el;
+        return {
+          ...el,
+          currentCoords: { ...moved.redo },
+          initialCoords: { ...moved.redo },
+        };
+      }),
+    );
+  };
   const viewStrictMode = () => {
     setSettings((prev) => ({ ...prev, strictMode: !prev.strictMode }));
   };
@@ -678,8 +816,25 @@ export default function ControlPanel({
   };
   const resetView = () =>
     setTransform((prev) => ({ ...prev, zoom: 1, pan: { x: 0, y: 0 } }));
-  const fitWindow = () => fitToView(tables);
-  const fitToView = (tablesToFit) => {
+  const fitWindow = () => fitToView();
+  const zoomToSelection = () => {
+    const selection = getSelection();
+    if (selection.length === 0) return;
+    const selected = (type) =>
+      selection.filter((el) => el.type === type).map(findElement);
+    fitToView({
+      tables: selected(ObjectType.TABLE),
+      views: selected(ObjectType.VIEW),
+      areas: selected(ObjectType.AREA),
+      notes: selected(ObjectType.NOTE),
+    });
+  };
+  const fitToView = ({
+    tables: tablesToFit = tables,
+    views: viewsToFit = views,
+    areas: areasToFit = areas,
+    notes: notesToFit = notes,
+  } = {}) => {
     const canvas = document.getElementById("canvas").getBoundingClientRect();
 
     const minMaxXY = {
@@ -699,7 +854,7 @@ export default function ControlPanel({
       );
     });
 
-    views.forEach((view) => {
+    viewsToFit.forEach((view) => {
       minMaxXY.minX = Math.min(minMaxXY.minX, view.x);
       minMaxXY.minY = Math.min(minMaxXY.minY, view.y);
       minMaxXY.maxX = Math.max(minMaxXY.maxX, view.x + getViewWidth(view));
@@ -714,14 +869,14 @@ export default function ControlPanel({
       );
     });
 
-    areas.forEach((area) => {
+    areasToFit.forEach((area) => {
       minMaxXY.minX = Math.min(minMaxXY.minX, area.x);
       minMaxXY.minY = Math.min(minMaxXY.minY, area.y);
       minMaxXY.maxX = Math.max(minMaxXY.maxX, area.x + area.width);
       minMaxXY.maxY = Math.max(minMaxXY.maxY, area.y + area.height);
     });
 
-    notes.forEach((note) => {
+    notesToFit.forEach((note) => {
       minMaxXY.minX = Math.min(minMaxXY.minX, note.x);
       minMaxXY.minY = Math.min(minMaxXY.minY, note.y);
       minMaxXY.maxX = Math.max(
@@ -730,6 +885,9 @@ export default function ControlPanel({
       );
       minMaxXY.maxY = Math.max(minMaxXY.maxY, note.y + note.height);
     });
+
+    // nothing to fit
+    if (minMaxXY.minX === Infinity) return;
 
     const padding = 10;
     const width = minMaxXY.maxX - minMaxXY.minX + padding;
@@ -781,7 +939,7 @@ export default function ControlPanel({
       },
     ]);
     setRedoStack([]);
-    fitToView(arrangedTables);
+    fitToView({ tables: arrangedTables });
   };
   const autoConnectFKs = () => {
     if (layout.readOnly) return;
@@ -1675,7 +1833,7 @@ export default function ControlPanel({
       },
       redo: {
         function: redo,
-        shortcut: "Ctrl+Y",
+        shortcut: "Ctrl+Y / Ctrl+Shift+Z",
         disabled: layout.readOnly || redoStack.length === 0,
       },
       clear: {
@@ -1721,8 +1879,8 @@ export default function ControlPanel({
         disabled: layout.readOnly,
       },
       delete: {
-        function: del,
-        shortcut: "Del",
+        function: deleteSelection,
+        shortcut: "Del / Backspace",
         disabled: layout.readOnly,
       },
       auto_arrange: {
@@ -1900,11 +2058,11 @@ export default function ControlPanel({
       },
       zoom_in: {
         function: zoomIn,
-        shortcut: "Ctrl+(Up/Wheel)",
+        shortcut: "Ctrl+(=/Up/Wheel)",
       },
       zoom_out: {
         function: zoomOut,
-        shortcut: "Ctrl+(Down/Wheel)",
+        shortcut: "Ctrl+(-/Down/Wheel)",
       },
       fullscreen: {
         state: fullscreen ? (
@@ -1982,7 +2140,7 @@ export default function ControlPanel({
 
   useHotkeys("mod+i", fileImport, EDITOR_HOTKEY);
   useHotkeys("mod+z", undo, EDITOR_HOTKEY);
-  useHotkeys("mod+y", redo, EDITOR_HOTKEY);
+  useHotkeys("mod+y, mod+shift+z", redo, EDITOR_HOTKEY);
   useHotkeys("mod+s", save, EDITOR_HOTKEY);
   useHotkeys("mod+o", open, EDITOR_HOTKEY);
   useHotkeys("mod+e", edit, EDITOR_HOTKEY);
@@ -1990,10 +2148,20 @@ export default function ControlPanel({
   useHotkeys("mod+c", copy, EDITOR_HOTKEY);
   useHotkeys("mod+v", paste, EDITOR_HOTKEY);
   useHotkeys("mod+x", cut, EDITOR_HOTKEY);
-  useHotkeys("delete", del, EDITOR_HOTKEY);
+  useHotkeys("delete, backspace", deleteSelection, EDITOR_HOTKEY);
+  useHotkeys("mod+a", selectAll, EDITOR_HOTKEY);
+  useHotkeys("escape", deselect, EDITOR_HOTKEY);
   useHotkeys("mod+shift+g", viewGrid, EDITOR_HOTKEY);
-  useHotkeys("mod+up", zoomIn, EDITOR_HOTKEY);
-  useHotkeys("mod+down", zoomOut, EDITOR_HOTKEY);
+  // matched by physical key: "+" is on the semicolon key on JIS keyboards
+  useHotkeys(
+    "mod+up, mod+equal, mod+shift+equal, mod+semicolon, mod+shift+semicolon, mod+add",
+    zoomIn,
+    EDITOR_HOTKEY,
+  );
+  useHotkeys("mod+down, mod+minus, mod+subtract", zoomOut, EDITOR_HOTKEY);
+  useHotkeys("shift+0", resetZoom, EDITOR_HOTKEY);
+  useHotkeys("shift+1", fitWindow, EDITOR_HOTKEY);
+  useHotkeys("shift+2", zoomToSelection, EDITOR_HOTKEY);
   useHotkeys("mod+shift+m", viewStrictMode, EDITOR_HOTKEY);
   useHotkeys("mod+shift+f", viewFieldSummary, EDITOR_HOTKEY);
   useHotkeys("mod+shift+s", saveDiagramAs, EDITOR_HOTKEY);
@@ -2002,10 +2170,14 @@ export default function ControlPanel({
   useHotkeys("mod+h", () => window.open(socials.docs, "_blank"), EDITOR_HOTKEY);
   useHotkeys("mod+alt+w", fitWindow, EDITOR_HOTKEY);
   useHotkeys("alt+e", toggleDBMLEditor, EDITOR_HOTKEY);
-  useHotkeys("left", panLeft, EDITOR_HOTKEY);
-  useHotkeys("right", panRight, EDITOR_HOTKEY);
-  useHotkeys("up", panUp, EDITOR_HOTKEY);
-  useHotkeys("down", panDown, EDITOR_HOTKEY);
+  useHotkeys("left", () => nudgeOrPan(-1, 0, 1), EDITOR_HOTKEY);
+  useHotkeys("right", () => nudgeOrPan(1, 0, 1), EDITOR_HOTKEY);
+  useHotkeys("up", () => nudgeOrPan(0, -1, 1), EDITOR_HOTKEY);
+  useHotkeys("down", () => nudgeOrPan(0, 1, 1), EDITOR_HOTKEY);
+  useHotkeys("shift+left", () => nudgeOrPan(-1, 0, 10), EDITOR_HOTKEY);
+  useHotkeys("shift+right", () => nudgeOrPan(1, 0, 10), EDITOR_HOTKEY);
+  useHotkeys("shift+up", () => nudgeOrPan(0, -1, 10), EDITOR_HOTKEY);
+  useHotkeys("shift+down", () => nudgeOrPan(0, 1, 10), EDITOR_HOTKEY);
 
   return (
     <>
@@ -2068,9 +2240,7 @@ export default function ControlPanel({
         cancelText={t("cancel")}
       >
         <div className="space-y-3">
-          <p className="text-sm">
-            {t("auto_connect_fk_modal_description")}
-          </p>
+          <p className="text-sm">{t("auto_connect_fk_modal_description")}</p>
           <ol className="list-decimal ps-5 space-y-1 text-sm">
             <li>{t("auto_connect_fk_rule_1")}</li>
             <li>{t("auto_connect_fk_rule_2")}</li>
@@ -2114,7 +2284,7 @@ export default function ControlPanel({
                   style={{ display: "flex", justifyContent: "space-between" }}
                 >
                   <div>{t("fit_window_reset")}</div>
-                  <div className="text-gray-400">Ctrl+Alt+W</div>
+                  <div className="text-gray-400">Shift+1</div>
                 </Dropdown.Item>
                 <Dropdown.Divider />
                 {[0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0].map((e, i) => (
@@ -2317,8 +2487,12 @@ export default function ControlPanel({
                     filter:
                       "opacity(0.4) drop-shadow(0 0 0 white) drop-shadow(0 0 0 white)",
                   }}
-                  alt={t("database_icon", { databaseName: databases[database].name })}
-                  title={t("database_diagram", { databaseName: databases[database].name })}
+                  alt={t("database_icon", {
+                    databaseName: databases[database].name,
+                  })}
+                  title={t("database_diagram", {
+                    databaseName: databases[database].name,
+                  })}
                 />
               )}
               <Slot name="diagram-title-prefix" />

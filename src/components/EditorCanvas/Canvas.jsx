@@ -33,6 +33,7 @@ import {
 } from "../../hooks";
 import { useTranslation } from "react-i18next";
 import { useEventListener } from "usehooks-ts";
+import { useHotkeys } from "react-hotkeys-hook";
 import {
   areFieldsCompatible,
   getTableHeight,
@@ -126,6 +127,7 @@ export default function Canvas() {
     panStart: { x: 0, y: 0 },
     cursorStart: { x: 0, y: 0 },
   });
+  const [spacePressed, setSpacePressed] = useState(false);
   const [areaResize, setAreaResize] = useState({ id: -1, dir: "none" });
   const [areaInitDimensions, setAreaInitDimensions] = useState({
     x: 0,
@@ -260,7 +262,10 @@ export default function Canvas() {
 
     if (!e.isPrimary) return;
 
-    if (!element.locked || !(e.ctrlKey || e.metaKey)) {
+    // shift+click adds to the selection like in figma, ctrl/cmd+click still works
+    const isAdditive = e.ctrlKey || e.metaKey || e.shiftKey;
+
+    if (!element.locked || !isAdditive) {
       setSelectedElement((prev) => ({
         ...prev,
         element: type,
@@ -270,7 +275,7 @@ export default function Canvas() {
     }
 
     if (element.locked) {
-      if (!(e.ctrlKey || e.metaKey)) {
+      if (!isAdditive) {
         setBulkSelectedElements([]);
       }
       return;
@@ -294,7 +299,7 @@ export default function Canvas() {
       isSameElement(el, elementInBulk),
     );
 
-    if (e.ctrlKey || e.metaKey) {
+    if (isAdditive) {
       if (isSelected) {
         if (bulkSelectedElements.length > 1) {
           setBulkSelectedElements(
@@ -501,7 +506,7 @@ export default function Canvas() {
         x2: pointer.spaces.diagram.x,
         y2: pointer.spaces.diagram.y,
         show: elementPointerDown === null || !elementPointerDown.element.locked,
-        ctrlKey: e.ctrlKey,
+        ctrlKey: e.ctrlKey || e.shiftKey,
         metaKey: e.metaKey,
       });
       if (elementPointerDown !== null) {
@@ -599,7 +604,7 @@ export default function Canvas() {
       if (e.button === 2) rightClickPanned.current = true;
     }
     setPanning((old) => ({ ...old, isPanning: false }));
-    pointer.setStyle("default");
+    pointer.setStyle(spacePressed ? "grab" : "default");
 
     if (linking) handleLinking();
     setLinking(false);
@@ -717,37 +722,49 @@ export default function Canvas() {
     (e) => {
       e.preventDefault();
 
+      // firefox may report the delta in lines or pages instead of pixels
+      const deltaScale =
+        e.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 16
+          : e.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? 800
+            : 1;
+      const deltaX = e.deltaX * deltaScale;
+      const deltaY = e.deltaY * deltaScale;
+
       if (e.ctrlKey || e.metaKey) {
-        const eagernessFactor = 0.05;
+        // mouse wheels send large integer steps and keep the fixed 5% zoom,
+        // trackpad pinches send many small deltas and zoom proportionally
+        const isMouseWheel =
+          e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
+          (Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 50);
+        const factor = isMouseWheel
+          ? deltaY <= 0
+            ? 1.05
+            : 1 / 1.05
+          : Math.exp(-Math.max(-50, Math.min(50, deltaY)) * 0.01);
+        // keep the point under the cursor fixed while zooming
         setTransform((prev) => ({
           pan: {
             x:
-              prev.pan.x -
-              (pointer.spaces.diagram.x - prev.pan.x) *
-                eagernessFactor *
-                Math.sign(e.deltaY),
+              pointer.spaces.diagram.x -
+              (pointer.spaces.diagram.x - prev.pan.x) / factor,
             y:
-              prev.pan.y -
-              (pointer.spaces.diagram.y - prev.pan.y) *
-                eagernessFactor *
-                Math.sign(e.deltaY),
+              pointer.spaces.diagram.y -
+              (pointer.spaces.diagram.y - prev.pan.y) / factor,
           },
-          zoom: e.deltaY <= 0 ? prev.zoom * 1.05 : prev.zoom / 1.05,
-        }));
-      } else if (e.shiftKey) {
-        setTransform((prev) => ({
-          ...prev,
-          pan: {
-            ...prev.pan,
-            x: prev.pan.x + e.deltaY / prev.zoom,
-          },
+          zoom: prev.zoom * factor,
         }));
       } else {
+        // trackpads scroll in both directions, shift+wheel scrolls sideways
+        const swap = e.shiftKey && deltaX === 0;
+        const dx = swap ? deltaY : deltaX;
+        const dy = swap ? 0 : deltaY;
         setTransform((prev) => ({
           ...prev,
           pan: {
-            ...prev.pan,
-            y: prev.pan.y + e.deltaY / prev.zoom,
+            x: prev.pan.x + dx / prev.zoom,
+            y: prev.pan.y + dy / prev.zoom,
           },
         }));
       }
@@ -755,6 +772,46 @@ export default function Canvas() {
     canvasRef,
     { passive: false },
   );
+
+  // hold space to pan with the left mouse button, like in figma.
+  // react-hotkeys-hook ignores events from inputs and textareas by default
+  useHotkeys(
+    "space",
+    (e) => {
+      const pressed = e.type === "keydown";
+      setSpacePressed(pressed);
+      if (!panning.isPanning) pointer.setStyle(pressed ? "grab" : "default");
+    },
+    {
+      keydown: true,
+      keyup: true,
+      preventDefault: true,
+      ignoreEventWhen: (e) => Boolean(e.target?.closest?.(".monaco-editor")),
+    },
+  );
+
+  // keyup is never received if the window loses focus while space is held
+  useEventListener("blur", () => {
+    setSpacePressed(false);
+    if (!panning.isPanning) pointer.setStyle("default");
+  });
+
+  /**
+   * Runs in the capture phase so that tables, notes, areas and their
+   * handles don't start dragging, resizing or linking while space is held.
+   * @param {PointerEvent} e
+   */
+  const handlePointerDownCapture = (e) => {
+    if (!spacePressed || !e.isPrimary || e.button !== 0) return;
+    if (selectedElement.open && !layout.sidebar) return;
+    e.stopPropagation();
+    setPanning({
+      isPanning: true,
+      panStart: transform.pan,
+      cursorStart: pointer.spaces.screen,
+    });
+    pointer.setStyle("grabbing");
+  };
 
   return (
     <div className="grow h-full touch-none" id="canvas">
@@ -769,6 +826,7 @@ export default function Canvas() {
           id="diagram"
           ref={canvasRef}
           onPointerMove={handlePointerMove}
+          onPointerDownCapture={handlePointerDownCapture}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onContextMenu={(e) => {
