@@ -170,7 +170,12 @@ export default function ControlPanel({
   const { notes, setNotes, updateNote, addNote, deleteNote } = useNotes();
   const { areas, setAreas, updateArea, addArea, deleteArea } = useAreas();
   const { undoStack, redoStack, setUndoStack, setRedoStack } = useUndoRedo();
-  const { selectedElement, setSelectedElement } = useSelect();
+  const {
+    selectedElement,
+    setSelectedElement,
+    bulkSelectedElements,
+    setBulkSelectedElements,
+  } = useSelect();
   const { transform, setTransform } = useTransform();
   const { t, i18n } = useTranslation();
   const { version, gistId, setGistId } = useContext(IdContext);
@@ -262,7 +267,13 @@ export default function ControlPanel({
       }
     } else if (a.action === Action.DELETE) {
       if (a.element === ObjectType.TABLE) {
-        a.data.relationship.forEach((x) => addRelationship(x, false));
+        // when connected tables are deleted together, each undo entry holds
+        // the shared relationships, so skip the ones already restored
+        a.data.relationship.forEach((x) => {
+          if (!relationships.some((r) => r.id === x.id)) {
+            addRelationship(x, false);
+          }
+        });
         addTable(a.data, false);
       } else if (a.element === ObjectType.RELATIONSHIP) {
         addRelationship(a.data, false);
@@ -648,6 +659,83 @@ export default function ControlPanel({
         y: prev.pan.y + dy / prev.zoom,
       },
     }));
+  const findElement = ({ id, type }) => {
+    switch (type) {
+      case ObjectType.TABLE:
+        return tables.find((t) => t.id === id);
+      case ObjectType.VIEW:
+        return views.find((v) => v.id === id);
+      case ObjectType.AREA:
+        return areas.find((a) => a.id === id);
+      case ObjectType.NOTE:
+        return notes.find((n) => n.id === id);
+      default:
+        return undefined;
+    }
+  };
+
+  // what is highlighted on the canvas: the selected element plus the bulk selection
+  const getSelection = () => {
+    const selection = bulkSelectedElements.map(({ id, type }) => ({
+      id,
+      type,
+    }));
+    const isSelectedInBulk = selection.some(
+      (el) =>
+        el.id === selectedElement.id && el.type === selectedElement.element,
+    );
+    if (selectedElement.element !== ObjectType.NONE && !isSelectedInBulk) {
+      selection.push({ id: selectedElement.id, type: selectedElement.element });
+    }
+    return selection.filter((el) => findElement(el) !== undefined);
+  };
+
+  const selectAll = () => {
+    const toBulkElement = (type) => (element) => ({
+      id: element.id,
+      type,
+      currentCoords: { x: element.x, y: element.y },
+      initialCoords: { x: element.x, y: element.y },
+    });
+    const unlocked = (element) => !element.locked;
+    setBulkSelectedElements([
+      ...tables.filter(unlocked).map(toBulkElement(ObjectType.TABLE)),
+      ...views.filter(unlocked).map(toBulkElement(ObjectType.VIEW)),
+      ...areas.filter(unlocked).map(toBulkElement(ObjectType.AREA)),
+      ...notes.filter(unlocked).map(toBulkElement(ObjectType.NOTE)),
+    ]);
+  };
+
+  const deselect = () => {
+    setBulkSelectedElements([]);
+    setSelectedElement((prev) => ({
+      ...prev,
+      element: ObjectType.NONE,
+      id: -1,
+      open: false,
+    }));
+  };
+
+  const deleteSelection = () => {
+    if (layout.readOnly) return;
+    const selection = getSelection();
+    if (selection.length === 0) return;
+
+    // notes and areas use their index as id and get re-indexed on delete,
+    // so delete them from the highest id down
+    const byIdDesc = (a, b) => b.id - a.id;
+    const ofType = (type) => selection.filter((el) => el.type === type);
+    ofType(ObjectType.TABLE).forEach((el) => deleteTable(el.id));
+    ofType(ObjectType.VIEW).forEach((el) => deleteView(el.id));
+    ofType(ObjectType.AREA)
+      .sort(byIdDesc)
+      .forEach((el) => deleteArea(el.id));
+    ofType(ObjectType.NOTE)
+      .sort(byIdDesc)
+      .forEach((el) => deleteNote(el.id));
+    setBulkSelectedElements([]);
+  };
+
   const panLeft = () => panBy(-keyboardPanStep, 0);
   const panRight = () => panBy(keyboardPanStep, 0);
   const panUp = () => panBy(0, -keyboardPanStep);
@@ -1675,7 +1763,7 @@ export default function ControlPanel({
       },
       redo: {
         function: redo,
-        shortcut: "Ctrl+Y",
+        shortcut: "Ctrl+Y / Ctrl+Shift+Z",
         disabled: layout.readOnly || redoStack.length === 0,
       },
       clear: {
@@ -1721,8 +1809,8 @@ export default function ControlPanel({
         disabled: layout.readOnly,
       },
       delete: {
-        function: del,
-        shortcut: "Del",
+        function: deleteSelection,
+        shortcut: "Del / Backspace",
         disabled: layout.readOnly,
       },
       auto_arrange: {
@@ -1982,7 +2070,7 @@ export default function ControlPanel({
 
   useHotkeys("mod+i", fileImport, EDITOR_HOTKEY);
   useHotkeys("mod+z", undo, EDITOR_HOTKEY);
-  useHotkeys("mod+y", redo, EDITOR_HOTKEY);
+  useHotkeys("mod+y, mod+shift+z", redo, EDITOR_HOTKEY);
   useHotkeys("mod+s", save, EDITOR_HOTKEY);
   useHotkeys("mod+o", open, EDITOR_HOTKEY);
   useHotkeys("mod+e", edit, EDITOR_HOTKEY);
@@ -1990,7 +2078,9 @@ export default function ControlPanel({
   useHotkeys("mod+c", copy, EDITOR_HOTKEY);
   useHotkeys("mod+v", paste, EDITOR_HOTKEY);
   useHotkeys("mod+x", cut, EDITOR_HOTKEY);
-  useHotkeys("delete", del, EDITOR_HOTKEY);
+  useHotkeys("delete, backspace", deleteSelection, EDITOR_HOTKEY);
+  useHotkeys("mod+a", selectAll, EDITOR_HOTKEY);
+  useHotkeys("escape", deselect, EDITOR_HOTKEY);
   useHotkeys("mod+shift+g", viewGrid, EDITOR_HOTKEY);
   useHotkeys("mod+up", zoomIn, EDITOR_HOTKEY);
   useHotkeys("mod+down", zoomOut, EDITOR_HOTKEY);
@@ -2068,9 +2158,7 @@ export default function ControlPanel({
         cancelText={t("cancel")}
       >
         <div className="space-y-3">
-          <p className="text-sm">
-            {t("auto_connect_fk_modal_description")}
-          </p>
+          <p className="text-sm">{t("auto_connect_fk_modal_description")}</p>
           <ol className="list-decimal ps-5 space-y-1 text-sm">
             <li>{t("auto_connect_fk_rule_1")}</li>
             <li>{t("auto_connect_fk_rule_2")}</li>
@@ -2317,8 +2405,12 @@ export default function ControlPanel({
                     filter:
                       "opacity(0.4) drop-shadow(0 0 0 white) drop-shadow(0 0 0 white)",
                   }}
-                  alt={t("database_icon", { databaseName: databases[database].name })}
-                  title={t("database_diagram", { databaseName: databases[database].name })}
+                  alt={t("database_icon", {
+                    databaseName: databases[database].name,
+                  })}
+                  title={t("database_diagram", {
+                    databaseName: databases[database].name,
+                  })}
                 />
               )}
               <Slot name="diagram-title-prefix" />
