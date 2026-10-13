@@ -70,6 +70,8 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     useState(readDismissedBanners);
   const pendingNewIdRef = useRef(null);
   const loadedIdRef = useRef(null);
+  // actions registered by the control panel, used by the canvas context menu
+  const editorActionsRef = useRef(null);
   const { layout, setLayout } = useLayout();
   const { settings } = useSettings();
   const { types, setTypes } = useTypes();
@@ -77,6 +79,11 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
   const { notes, setNotes } = useNotes();
   const { saveState, setSaveState } = useSaveState();
   const { transform, setTransform } = useTransform();
+  // read by save() through a ref: if `save` depended on the transform it
+  // would be recreated on every pan frame, and while a save is in progress
+  // that re-runs the save effect and starts a new write for each frame
+  const transformRef = useRef(transform);
+  transformRef.current = transform;
   const { enums, setEnums } = useEnums();
   const { views, setViews } = useViews();
   const {
@@ -120,8 +127,8 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       notes,
       areas,
       views,
-      pan: transform.pan,
-      zoom: transform.zoom,
+      pan: transformRef.current.pan,
+      zoom: transformRef.current.zoom,
       ...(databases[database].hasEnums && { enums }),
       ...(databases[database].hasTypes && { types }),
     }),
@@ -134,7 +141,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       notes,
       areas,
       views,
-      transform,
       enums,
       types,
     ],
@@ -186,8 +192,8 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           notes: notes,
           areas: areas,
           views: views,
-          pan: transform.pan,
-          zoom: transform.zoom,
+          pan: transformRef.current.pan,
+          zoom: transformRef.current.zoom,
           loadedFromGistId: loadedFromGistId,
           ...(databases[database].hasEnums && { enums: enums }),
           ...(databases[database].hasTypes && { types: types }),
@@ -211,8 +217,8 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           areas: areas,
           views: views,
           gistId: gistId ?? "",
-          pan: transform.pan,
-          zoom: transform.zoom,
+          pan: transformRef.current.pan,
+          zoom: transformRef.current.zoom,
           loadedFromGistId: loadedFromGistId,
           ...(databases[database].hasEnums && { enums: enums }),
           ...(databases[database].hasTypes && { types: types }),
@@ -236,7 +242,6 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     views,
     types,
     title,
-    transform,
     setSaveState,
     setLastSaved,
     database,
@@ -267,13 +272,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       console.warn("move to cloud failed:", err);
       setSaveState(State.ERROR);
     }
-  }, [
-    extensions,
-    loadedDiagramId,
-    buildCloudPayload,
-    setSaveState,
-    cloudLoad,
-  ]);
+  }, [extensions, loadedDiagramId, buildCloudPayload, setSaveState, cloudLoad]);
 
   const dismissMoveToCloud = () => {
     if (!loadedDiagramId) return;
@@ -529,6 +528,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           lastSaved={lastSaved}
           setLastSaved={setLastSaved}
           toolbarContainer={toolbarContainer}
+          editorActions={editorActionsRef}
         />
       </IdContext.Provider>
       <div
@@ -548,7 +548,11 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
         )}
         <div className="relative flex-1 min-w-0 h-full overflow-hidden">
           <CanvasContextProvider className="h-full w-full">
-            <Canvas saveState={saveState} setSaveState={setSaveState} />
+            <Canvas
+              saveState={saveState}
+              setSaveState={setSaveState}
+              editorActions={editorActionsRef}
+            />
           </CanvasContextProvider>
           <Slot name="canvas-overlay" />
           {layout.toolbar && (
@@ -581,9 +585,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
               <div className="pointer-events-none absolute inset-x-0 top-3 z-50 flex justify-center">
                 <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-blue-300 bg-blue-50 px-5 py-1.5 shadow-md dark:border-sky-900/50 dark:bg-sky-900/30">
                   <i className="bi bi-hdd" />
-                  <span className="text-sm">
-                    {t("move_to_cloud_prompt")}
-                  </span>
+                  <span className="text-sm">{t("move_to_cloud_prompt")}</span>
                   <Button
                     size="small"
                     theme="solid"
